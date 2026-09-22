@@ -1,5 +1,8 @@
-import type { PaseoApi, PaseoWorkspace } from "@getpaseo/client";
+import type { usePaseo } from "@getpaseo/plugin/client";
 import type { PrDetails } from "../shared/details";
+
+type PaseoApi = ReturnType<typeof usePaseo>;
+type PaseoWorkspace = Awaited<ReturnType<PaseoApi["workspaces"]["list"]>>["entries"][number];
 
 export function githubRepository(remote: string | null | undefined) {
   const match = remote?.match(/^(?:git@github\.com:|https:\/\/github\.com\/|ssh:\/\/git@github\.com\/)([^/]+\/[^/]+?)\/?$/i);
