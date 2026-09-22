@@ -7,6 +7,7 @@ type Props = {
   theme: PluginSurfaceProps["theme"];
   compact: boolean;
   label: string;
+  accessibilityLabel?: string;
   onPress(): void;
   selected?: boolean;
   disabled?: boolean;
@@ -14,11 +15,11 @@ type Props = {
   role?: "button" | "tab" | "radio";
   expanded?: boolean;
 };
-export function Control({ theme, compact, label, onPress, selected = false, disabled = false, icon, role = "button", expanded }: Props) {
+export function Control({ theme, compact, label, accessibilityLabel, onPress, selected = false, disabled = false, icon, role = "button", expanded }: Props) {
   const [hovered, setHovered] = useState(false), [focused, setFocused] = useState(false);
   const c = theme.colors, primary = selected && role === "button", tab = role === "tab";
   const color = primary ? c.accentForeground : selected || role === "button" ? c.foreground : c.foregroundMuted;
-  return <Pressable accessibilityRole={role} accessibilityLabel={label} accessibilityState={{ selected, disabled }}
+  return <Pressable accessibilityRole={role} accessibilityLabel={accessibilityLabel ?? label} accessibilityState={{ selected, disabled }}
     aria-selected={tab ? selected : undefined} aria-checked={role === "radio" ? selected : undefined} aria-expanded={expanded}
     disabled={disabled} onPress={onPress} onHoverIn={() => setHovered(true)} onHoverOut={() => setHovered(false)} onFocus={() => setFocused(true)} onBlur={() => setFocused(false)} hitSlop={compact ? 4 : undefined}
     style={({ pressed }) => ({ flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 5,

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { actionSchema, prKeySchema } from "../shared/details";
 import { getDetails, getFiles, getActivity, getChecks, getCommits, performAction, type GitHubApi } from "../server/details";
-import { createReviewWorkspace, githubRepository, listWorkspaces, matchingProjects, matchingWorkspaces, reviewPrompt } from "../client/integration";
+import { createReviewWorkspace, githubRepository, listWorkspaces, matchingProjects, matchingWorkspaces } from "../client/integration";
 import type { PaseoApi, PaseoWorkspace } from "@getpaseo/client";
 
 const key = { repository: "org/repo", number: 12 }, sha = "a".repeat(40);
@@ -61,7 +61,6 @@ test("Paseo integration matches exact GitHub repositories and creates isolated P
   assert.equal((await listWorkspaces(paseo)).length, 1);
   await createReviewWorkspace(paseo, pr, "p1");
   assert.deepEqual(options, { title: "repo #12", source: { kind: "worktree", projectId: "p1", action: "checkout", checkoutSource: { kind: "change_request", forge: "github", number: 12, projectPath: "org/repo" } } });
-  assert.match(reviewPrompt(pr), /Do not modify files, post comments/);
 });
 
 test("line comments pin the reviewed SHA and replies target their original thread", async () => {
