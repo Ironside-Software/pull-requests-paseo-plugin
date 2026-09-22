@@ -1,0 +1,165 @@
+import { useRpc, type PluginSurfaceProps } from "@getpaseo/plugin/client";
+import { ExternalLink } from "@getpaseo/plugin/client/ui";
+import { useEffect, useMemo, useState } from "react";
+import { AppState, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { defaultFilters, filtersSchema, pullRequestsRpc, type Filters, type Tab } from "../shared/pull-requests";
+import { usePullRequests } from "./state";
+
+export function PullRequestsSurface({ theme, layout }: PluginSurfaceProps) {
+  const rpc = useRpc(pullRequestsRpc);
+  const [tab, setTab] = useState<Tab>("mine");
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const [filters, setFilters] = useState<Filters>(defaultFilters);
+  const [draft, setDraft] = useState<Filters>(defaultFilters);
+  const [validation, setValidation] = useState("");
+  const [linkError, setLinkError] = useState("");
+  const [active, setActive] = useState(AppState.currentState !== "background" && AppState.currentState !== "inactive");
+  useEffect(() => {
+    const subscription = AppState.addEventListener("change", state => setActive(state === "active"));
+    return () => subscription.remove();
+  }, []);
+  const query = usePullRequests(rpc, tab, filters, active);
+  const firstPage = query.data?.pages[0];
+  const items = [...new Map(query.data?.pages.flatMap(page => page.items).map(pr => [pr.id, pr]) ?? []).values()]
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || b.id - a.id);
+  const warnings = [...new Set(query.data?.pages.flatMap(page => page.warnings) ?? [])];
+  const owners = [...new Set(items.map(pr => pr.repository.split("/")[0]))].sort();
+  const repositories = [...new Set(items.map(pr => pr.repository))]
+    .filter(repo => !draft.owner || repo.split("/")[0].toLowerCase() === draft.owner.toLowerCase()).sort();
+  const c = theme.colors;
+  const styles = useMemo(() => StyleSheet.create({
+    screen: { flex: 1, backgroundColor: c.surface0 },
+    content: { padding: layout.compact ? 16 : 28, gap: 20, width: "100%", maxWidth: 1100, alignSelf: "center" },
+    header: { gap: 6 }, title: { fontSize: layout.compact ? 26 : 32, fontWeight: "700", color: c.foreground },
+    subtitle: { fontSize: 14, lineHeight: 21, color: c.foregroundMuted },
+    row: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 8 },
+    button: { minHeight: 44, justifyContent: "center", paddingHorizontal: 14, paddingVertical: 10, borderRadius: 8, backgroundColor: c.surface2, borderWidth: 1, borderColor: c.border },
+    selected: { backgroundColor: c.accent, borderColor: c.accent },
+    buttonText: { color: c.foreground, fontSize: 14, fontWeight: "600" },
+    selectedText: { color: c.accentForeground },
+    panel: { backgroundColor: c.surface1, borderColor: c.border, borderWidth: 1, borderRadius: 12, padding: 16, gap: 16 },
+    field: { flexGrow: 1, flexBasis: layout.compact ? "100%" : 260, gap: 6 },
+    label: { color: c.foreground, fontSize: 13, fontWeight: "600" },
+    input: { minHeight: 44, borderWidth: 1, borderColor: c.border, borderRadius: 8, padding: 12, backgroundColor: c.surface0, color: c.foreground, fontSize: 14 },
+    card: { padding: 16, borderWidth: 1, borderColor: c.border, borderRadius: 10, backgroundColor: c.surface1, gap: 10 },
+    prTitle: { color: c.foreground, fontSize: 17, fontWeight: "600", lineHeight: 24 },
+    badge: { color: c.foregroundMuted, backgroundColor: c.surface2, borderRadius: 4, paddingHorizontal: 8, paddingVertical: 4, fontSize: 12 },
+    error: { color: c.statusDanger, fontSize: 14, lineHeight: 21 },
+    warning: { color: c.statusWarning, fontSize: 14, lineHeight: 21 },
+  }), [c, layout.compact]);
+
+  function button(label: string, onPress: () => void, selected = false, disabled = false, role: "button" | "tab" | "radio" = "button") {
+    return <Pressable key={label} accessibilityRole={role} accessibilityLabel={label}
+      accessibilityState={{ selected, disabled }} aria-selected={role === "tab" ? selected : undefined} aria-checked={role === "radio" ? selected : undefined} disabled={disabled} onPress={onPress}
+      style={[styles.button, selected && styles.selected, disabled && { opacity: 0.55 }]}>
+      <Text style={[styles.buttonText, selected && styles.selectedText]}>{label}</Text>
+    </Pressable>;
+  }
+  function update<K extends keyof Filters>(key: K, value: Filters[K]) {
+    setDraft(current => ({ ...current, [key]: value, ...(key === "owner" ? { repository: "" } : {}) }));
+    setValidation("");
+  }
+  function apply() {
+    const result = filtersSchema.safeParse(draft);
+    if (!result.success) { setValidation(result.error.issues[0].message); return; }
+    setFilters(result.data);
+    setDraft(result.data);
+    setValidation("");
+  }
+  function clear() { setDraft(defaultFilters); setFilters(defaultFilters); setValidation(""); }
+  const pending = JSON.stringify(draft) !== JSON.stringify(filters);
+  const filtered = Object.entries(filters).some(([key, value]) => value !== defaultFilters[key as keyof Filters] && (tab === "mine" || key !== "relationship"));
+
+  return <ScrollView style={styles.screen} contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+    <View style={styles.header}>
+      <Text accessibilityRole="header" style={styles.title}>Pull Requests</Text>
+      <Text style={styles.subtitle}>{firstPage ? `GitHub · @${firstPage.login} · Across your repositories` : "Your work and review requests, in one place."}</Text>
+    </View>
+    <View style={styles.row}>
+      {button("My PRs", () => setTab("mine"), tab === "mine", false, "tab")}
+      {button("Awaiting my review", () => setTab("reviews"), tab === "reviews", false, "tab")}
+    </View>
+    <View style={styles.row}>
+      <Pressable accessibilityRole="button" accessibilityLabel="Filters" aria-expanded={filtersOpen}
+        onPress={() => setFiltersOpen(open => !open)} style={styles.button}>
+        <Text style={styles.buttonText}>Filters{filtered ? " · Active" : ""}{filtersOpen ? " −" : " +"}</Text>
+      </Pressable>
+      {filtered && button("Clear filters", clear)}
+    </View>
+    {filtersOpen && <View style={styles.panel}>
+      <Text accessibilityRole="header" style={styles.label}>Filters</Text>
+      <View style={styles.row}>
+        <View style={styles.field}>
+          <Text style={styles.label}>Organization or owner</Text>
+          <TextInput accessibilityLabel="Organization or owner" placeholder="All owners" placeholderTextColor={c.foregroundMuted}
+            autoCapitalize="none" autoCorrect={false} maxLength={100} value={draft.owner} onChangeText={value => update("owner", value)} style={styles.input} onSubmitEditing={apply} />
+        </View>
+        <View style={styles.field}>
+          <Text style={styles.label}>Repository</Text>
+          <TextInput accessibilityLabel="Repository" placeholder={draft.owner ? "Repository name" : "owner/repository"} placeholderTextColor={c.foregroundMuted}
+            autoCapitalize="none" autoCorrect={false} maxLength={201} value={draft.repository} onChangeText={value => update("repository", value)} style={styles.input} onSubmitEditing={apply} />
+        </View>
+      </View>
+      {(owners.length > 0 || repositories.length > 0) && <View style={{ gap: 8 }}>
+        <Text style={styles.subtitle}>Suggestions from loaded PRs. You can enter any owner or repository above.</Text>
+        <View style={styles.row}>{owners.slice(0, 5).map(owner => button(owner, () => update("owner", owner), draft.owner === owner))}</View>
+        <View style={styles.row}>{repositories.slice(0, 5).map(repo => button(repo, () => update("repository", repo), draft.repository === repo))}</View>
+      </View>}
+      <View style={{ gap: 6 }}>
+        <Text style={styles.label}>Search titles</Text>
+        <TextInput accessibilityLabel="Search titles" placeholder="Search PR titles…" placeholderTextColor={c.foregroundMuted}
+          maxLength={120} value={draft.text} onChangeText={value => update("text", value)} style={styles.input} onSubmitEditing={apply} />
+      </View>
+      <View style={{ gap: 8 }}>
+        <Text style={styles.label}>Status</Text>
+        <View accessibilityRole="radiogroup" accessibilityLabel="Status" style={styles.row}>
+          {button("All statuses", () => update("status", "all"), draft.status === "all", false, "radio")}
+          {button("Ready for review", () => update("status", "ready"), draft.status === "ready", false, "radio")}
+          {button("Draft", () => update("status", "draft"), draft.status === "draft", false, "radio")}
+        </View>
+      </View>
+      {tab === "mine" && <View style={{ gap: 8 }}>
+        <Text style={styles.label}>Relationship</Text>
+        <View accessibilityRole="radiogroup" accessibilityLabel="Relationship" style={styles.row}>
+          {button("Authored or assigned", () => update("relationship", "both"), draft.relationship === "both", false, "radio")}
+          {button("Authored by me", () => update("relationship", "authored"), draft.relationship === "authored", false, "radio")}
+          {button("Assigned to me", () => update("relationship", "assigned"), draft.relationship === "assigned", false, "radio")}
+        </View>
+      </View>}
+      <View style={styles.row}>
+        {button("Apply filters", apply, true)}
+        {!filtered && button("Clear filters", clear)}
+        {pending && <Text style={styles.subtitle}>Unapplied changes</Text>}
+      </View>
+      {!!validation && <Text accessibilityRole="alert" style={styles.error}>{validation}</Text>}
+    </View>}
+    <View style={styles.row}>
+      {button(query.isFetching && !query.isFetchingNextPage ? "Refreshing…" : "Refresh", () => void query.refetch(), false, query.isFetching)}
+      <Text accessibilityLiveRegion="polite" style={styles.subtitle}>
+        {firstPage ? `${items.length} of ${firstPage.total} PRs${filtered ? " · Filtered" : ""}` : query.isPending ? "Loading pull requests…" : "Unable to load pull requests"}
+      </Text>
+      {query.dataUpdatedAt > 0 && <Text style={styles.subtitle}>Updated {new Date(query.dataUpdatedAt).toLocaleTimeString()}</Text>}
+    </View>
+    {tab === "reviews" && <Text style={styles.subtitle}>Outstanding requests for you and your teams.</Text>}
+    {!!query.error && <Text accessibilityRole="alert" style={styles.error}>{firstPage ? "Showing previous results. " : ""}{query.error.message}</Text>}
+    {warnings.map(warning => <Text key={warning} accessibilityRole="alert" style={styles.warning}>{warning}</Text>)}
+    {!!linkError && <Text accessibilityRole="alert" style={styles.error}>{linkError}</Text>}
+    {firstPage && items.length === 0 && <View style={styles.card}>
+      <Text style={styles.prTitle}>{filtered ? "No PRs match these filters" : tab === "mine" ? "No open PRs authored by or assigned to you" : "No reviews waiting for you"}</Text>
+      <Text style={styles.subtitle}>{filtered ? "Clear or adjust your filters to see more work." : "Refresh to check for new activity."}</Text>
+    </View>}
+    {items.map(pr => <View key={pr.id} style={styles.card}>
+      <Text style={styles.subtitle}>{pr.repository} · #{pr.number}</Text>
+      <ExternalLink href={pr.url} accessibilityLabel={`Open ${pr.repository} pull request ${pr.number}: ${pr.title}`} onError={() => setLinkError("Could not open GitHub. Please try the link again.")}>
+        <Text style={styles.prTitle}>{pr.title}</Text>
+      </ExternalLink>
+      <View style={styles.row}>
+        <Text style={styles.badge}>{pr.draft ? "Draft" : "Ready for review"}</Text>
+        {pr.authored && <Text style={styles.badge}>Authored</Text>}
+        {pr.assigned && <Text style={styles.badge}>Assigned</Text>}
+        <Text style={styles.subtitle}>by {pr.author} · Updated {new Date(pr.updatedAt).toLocaleString()}</Text>
+      </View>
+    </View>)}
+    {query.hasNextPage && button(query.isFetchingNextPage ? "Loading more…" : "Load more", () => void query.fetchNextPage(), false, query.isFetching)}
+  </ScrollView>;
+}
