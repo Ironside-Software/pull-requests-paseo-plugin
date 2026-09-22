@@ -39,14 +39,16 @@ export function githubError(error: unknown): Error {
   if (/rate limit|secondary rate|abuse/.test(stderr)) return new Error("GitHub rate limit reached. Wait a few minutes before refreshing.");
   if (/auth login|not logged|authentication|bad credentials|http 401/.test(stderr)) return new Error("GitHub login is missing or expired. Run gh auth login on the Paseo daemon host.");
   if (/saml|sso|http 403/.test(stderr)) return new Error("GitHub access was denied. Check the daemon account's repository permissions and organization SSO authorization.");
-  if (/http 422|validation failed/.test(stderr)) return new Error("GitHub could not search these filters. Check owner/repository spelling and account access.");
+  if (/http 409|http 405/.test(stderr)) return new Error("GitHub refused the merge. Refresh the PR and check conflicts, required reviews, and branch protection.");
+  if (/http 404/.test(stderr)) return new Error("GitHub could not find this PR or repository. Check your account access and refresh.");
+  if (/http 422|validation failed/.test(stderr)) return new Error("GitHub rejected the request. Check the filters, PR state, and your account permissions.");
   return new Error("Could not load pull requests from GitHub. Check the daemon's network connection and GitHub access, then refresh.");
 }
 
-export async function runGh(args: string[]): Promise<unknown> {
+export async function runGh(args: string[], method: "GET" | "POST" | "PUT" = "GET"): Promise<unknown> {
   let stdout: string;
   try {
-    ({ stdout } = await exec("gh", ["api", "--hostname", "github.com", "--method", "GET", ...args], {
+    ({ stdout } = await exec("gh", ["api", "--hostname", "github.com", "--method", method, ...args], {
       timeout: 20_000, maxBuffer: 8 * 1024 * 1024, encoding: "utf8", windowsHide: true,
       env: { ...process.env, GH_PROMPT_DISABLED: "1" },
     }));

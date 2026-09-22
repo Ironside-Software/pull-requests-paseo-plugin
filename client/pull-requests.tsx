@@ -1,24 +1,29 @@
 import { useRpc, type PluginSurfaceProps } from "@getpaseo/plugin/client";
-import { ExternalLink } from "@getpaseo/plugin/client/ui";
+import { Icon } from "@getpaseo/plugin/client/react-native";
+import { PullRequestDetails } from "./details";
+import type { PrKey } from "../shared/details";
 import { useEffect, useMemo, useState } from "react";
 import { AppState, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { defaultFilters, filtersSchema, pullRequestsRpc, type Filters, type Tab } from "../shared/pull-requests";
+import { Control } from "./control";
 import { usePullRequests } from "./state";
 
-export function PullRequestsSurface({ theme, layout }: PluginSurfaceProps) {
+export function PullRequestsSurface(props: PluginSurfaceProps & { initialRepository?: string }) {
+  const { theme, layout } = props;
+  const [selectedPr, setSelectedPr] = useState<PrKey | null>(null);
+  const initialFilters = { ...defaultFilters, repository: props.initialRepository ?? "" };
   const rpc = useRpc(pullRequestsRpc);
   const [tab, setTab] = useState<Tab>("mine");
   const [filtersOpen, setFiltersOpen] = useState(false);
-  const [filters, setFilters] = useState<Filters>(defaultFilters);
-  const [draft, setDraft] = useState<Filters>(defaultFilters);
+  const [filters, setFilters] = useState<Filters>(initialFilters);
+  const [draft, setDraft] = useState<Filters>(initialFilters);
   const [validation, setValidation] = useState("");
-  const [linkError, setLinkError] = useState("");
   const [active, setActive] = useState(AppState.currentState !== "background" && AppState.currentState !== "inactive");
   useEffect(() => {
     const subscription = AppState.addEventListener("change", state => setActive(state === "active"));
     return () => subscription.remove();
   }, []);
-  const query = usePullRequests(rpc, tab, filters, active);
+  const query = usePullRequests(rpc, tab, filters, active && !selectedPr, props.host.id);
   const firstPage = query.data?.pages[0];
   const items = [...new Map(query.data?.pages.flatMap(page => page.items).map(pr => [pr.id, pr]) ?? []).values()]
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || b.id - a.id);
@@ -29,31 +34,22 @@ export function PullRequestsSurface({ theme, layout }: PluginSurfaceProps) {
   const c = theme.colors;
   const styles = useMemo(() => StyleSheet.create({
     screen: { flex: 1, backgroundColor: c.surface0 },
-    content: { padding: layout.compact ? 16 : 28, gap: 20, width: "100%", maxWidth: 1100, alignSelf: "center" },
-    header: { gap: 6 }, title: { fontSize: layout.compact ? 26 : 32, fontWeight: "700", color: c.foreground },
-    subtitle: { fontSize: 14, lineHeight: 21, color: c.foregroundMuted },
+    content: { padding: layout.compact ? 12 : 20, gap: 10, width: "100%", maxWidth: 1200, alignSelf: "center" },
+    subtitle: { fontSize: 12, lineHeight: 18, color: c.foregroundMuted },
     row: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 8 },
-    button: { minHeight: 44, justifyContent: "center", paddingHorizontal: 14, paddingVertical: 10, borderRadius: 8, backgroundColor: c.surface2, borderWidth: 1, borderColor: c.border },
-    selected: { backgroundColor: c.accent, borderColor: c.accent },
-    buttonText: { color: c.foreground, fontSize: 14, fontWeight: "600" },
-    selectedText: { color: c.accentForeground },
-    panel: { backgroundColor: c.surface1, borderColor: c.border, borderWidth: 1, borderRadius: 12, padding: 16, gap: 16 },
+    panel: { backgroundColor: c.surface1, borderColor: c.border, borderWidth: 1, borderRadius: 8, padding: 12, gap: 10 },
     field: { flexGrow: 1, flexBasis: layout.compact ? "100%" : 260, gap: 6 },
     label: { color: c.foreground, fontSize: 13, fontWeight: "600" },
-    input: { minHeight: 44, borderWidth: 1, borderColor: c.border, borderRadius: 8, padding: 12, backgroundColor: c.surface0, color: c.foreground, fontSize: 14 },
-    card: { padding: 16, borderWidth: 1, borderColor: c.border, borderRadius: 10, backgroundColor: c.surface1, gap: 10 },
-    prTitle: { color: c.foreground, fontSize: 17, fontWeight: "600", lineHeight: 24 },
-    badge: { color: c.foregroundMuted, backgroundColor: c.surface2, borderRadius: 4, paddingHorizontal: 8, paddingVertical: 4, fontSize: 12 },
+    input: { minHeight: layout.compact ? 40 : 34, borderWidth: 1, borderColor: c.border, borderRadius: 5, padding: 8, backgroundColor: c.surface0, color: c.foreground, fontSize: 14 },
+    card: { paddingVertical: 10, borderBottomWidth: 1, borderColor: c.border, gap: 4 },
+    prTitle: { color: c.foreground, fontSize: 14, fontWeight: "600", lineHeight: 20 },
+    badge: { color: c.foregroundMuted, backgroundColor: c.surface2, borderRadius: 4, paddingHorizontal: 5, paddingVertical: 1, fontSize: 11 },
     error: { color: c.statusDanger, fontSize: 14, lineHeight: 21 },
     warning: { color: c.statusWarning, fontSize: 14, lineHeight: 21 },
   }), [c, layout.compact]);
 
   function button(label: string, onPress: () => void, selected = false, disabled = false, role: "button" | "tab" | "radio" = "button") {
-    return <Pressable key={label} accessibilityRole={role} accessibilityLabel={label}
-      accessibilityState={{ selected, disabled }} aria-selected={role === "tab" ? selected : undefined} aria-checked={role === "radio" ? selected : undefined} disabled={disabled} onPress={onPress}
-      style={[styles.button, selected && styles.selected, disabled && { opacity: 0.55 }]}>
-      <Text style={[styles.buttonText, selected && styles.selectedText]}>{label}</Text>
-    </Pressable>;
+    return <Control key={label} theme={theme} compact={layout.compact} label={label} onPress={onPress} selected={selected} disabled={disabled} role={role} />;
   }
   function update<K extends keyof Filters>(key: K, value: Filters[K]) {
     setDraft(current => ({ ...current, [key]: value, ...(key === "owner" ? { repository: "" } : {}) }));
@@ -70,20 +66,17 @@ export function PullRequestsSurface({ theme, layout }: PluginSurfaceProps) {
   const pending = JSON.stringify(draft) !== JSON.stringify(filters);
   const filtered = Object.entries(filters).some(([key, value]) => value !== defaultFilters[key as keyof Filters] && (tab === "mine" || key !== "relationship"));
 
-  return <ScrollView style={styles.screen} contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
-    <View style={styles.header}>
-      <Text accessibilityRole="header" style={styles.title}>Pull Requests</Text>
-      <Text style={styles.subtitle}>{firstPage ? `GitHub · @${firstPage.login} · Across your repositories` : "Your work and review requests, in one place."}</Text>
-    </View>
-    <View style={styles.row}>
-      {button("My PRs", () => setTab("mine"), tab === "mine", false, "tab")}
-      {button("Awaiting my review", () => setTab("reviews"), tab === "reviews", false, "tab")}
-    </View>
-    <View style={styles.row}>
-      <Pressable accessibilityRole="button" accessibilityLabel="Filters" aria-expanded={filtersOpen}
-        onPress={() => setFiltersOpen(open => !open)} style={styles.button}>
-        <Text style={styles.buttonText}>Filters{filtered ? " · Active" : ""}{filtersOpen ? " −" : " +"}</Text>
-      </Pressable>
+  return <>
+    {selectedPr && <PullRequestDetails {...props} key={`${selectedPr.repository}#${selectedPr.number}`} pr={selectedPr} active={active} onBack={() => { setSelectedPr(null); void query.refetch(); }} />}
+    <ScrollView style={[styles.screen, !!selectedPr && { display: "none" }]} contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+    <View style={[styles.row, { borderBottomWidth: 1, borderColor: c.border, gap: 4 }]}>
+      <View style={[styles.row, { gap: 4, ...(layout.compact ? { flexBasis: "100%" } : {}) }]}>
+        {button("My PRs", () => setTab("mine"), tab === "mine", false, "tab")}
+        {button("Awaiting my review", () => setTab("reviews"), tab === "reviews", false, "tab")}
+      </View>
+      {!layout.compact && <View style={{ flex: 1 }} />}
+      <Control theme={theme} compact={layout.compact} label={filtered ? "Filters · Active" : "Filters"} icon="ListFilter" expanded={filtersOpen} onPress={() => setFiltersOpen(open => !open)} />
+      <Control theme={theme} compact={layout.compact} label={query.isFetching && !query.isFetchingNextPage ? "Refreshing…" : "Refresh"} icon="RefreshCw" onPress={() => void query.refetch()} disabled={query.isFetching} />
       {filtered && button("Clear filters", clear)}
     </View>
     {filtersOpen && <View style={styles.panel}>
@@ -134,7 +127,6 @@ export function PullRequestsSurface({ theme, layout }: PluginSurfaceProps) {
       {!!validation && <Text accessibilityRole="alert" style={styles.error}>{validation}</Text>}
     </View>}
     <View style={styles.row}>
-      {button(query.isFetching && !query.isFetchingNextPage ? "Refreshing…" : "Refresh", () => void query.refetch(), false, query.isFetching)}
       <Text accessibilityLiveRegion="polite" style={styles.subtitle}>
         {firstPage ? `${items.length} of ${firstPage.total} PRs${filtered ? " · Filtered" : ""}` : query.isPending ? "Loading pull requests…" : "Unable to load pull requests"}
       </Text>
@@ -143,23 +135,15 @@ export function PullRequestsSurface({ theme, layout }: PluginSurfaceProps) {
     {tab === "reviews" && <Text style={styles.subtitle}>Outstanding requests for you and your teams.</Text>}
     {!!query.error && <Text accessibilityRole="alert" style={styles.error}>{firstPage ? "Showing previous results. " : ""}{query.error.message}</Text>}
     {warnings.map(warning => <Text key={warning} accessibilityRole="alert" style={styles.warning}>{warning}</Text>)}
-    {!!linkError && <Text accessibilityRole="alert" style={styles.error}>{linkError}</Text>}
     {firstPage && items.length === 0 && <View style={styles.card}>
       <Text style={styles.prTitle}>{filtered ? "No PRs match these filters" : tab === "mine" ? "No open PRs authored by or assigned to you" : "No reviews waiting for you"}</Text>
       <Text style={styles.subtitle}>{filtered ? "Clear or adjust your filters to see more work." : "Refresh to check for new activity."}</Text>
     </View>}
-    {items.map(pr => <View key={pr.id} style={styles.card}>
-      <Text style={styles.subtitle}>{pr.repository} · #{pr.number}</Text>
-      <ExternalLink href={pr.url} accessibilityLabel={`Open ${pr.repository} pull request ${pr.number}: ${pr.title}`} onError={() => setLinkError("Could not open GitHub. Please try the link again.")}>
-        <Text style={styles.prTitle}>{pr.title}</Text>
-      </ExternalLink>
-      <View style={styles.row}>
-        <Text style={styles.badge}>{pr.draft ? "Draft" : "Ready for review"}</Text>
-        {pr.authored && <Text style={styles.badge}>Authored</Text>}
-        {pr.assigned && <Text style={styles.badge}>Assigned</Text>}
-        <Text style={styles.subtitle}>by {pr.author} · Updated {new Date(pr.updatedAt).toLocaleString()}</Text>
-      </View>
-    </View>)}
+    <View>{items.map(pr => <Pressable key={pr.id} accessibilityRole="button" accessibilityLabel={`Open ${pr.repository} pull request ${pr.number}: ${pr.title}`} onPress={() => setSelectedPr({ repository: pr.repository, number: pr.number })} style={styles.card}>
+      <View style={styles.row}><Icon name="GitPullRequest" size={16} color={pr.draft ? c.foregroundMuted : c.accent} /><Text style={styles.subtitle}>{pr.repository} #{pr.number}</Text>{pr.draft && <Text style={styles.badge}>Draft</Text>}{pr.authored && <Text style={styles.badge}>Authored</Text>}{pr.assigned && <Text style={styles.badge}>Assigned</Text>}</View>
+      <Text style={styles.prTitle}>{pr.title}</Text>
+      <Text style={styles.subtitle}>{pr.author} · {new Date(pr.updatedAt).toLocaleString()}</Text>
+    </Pressable>)}</View>
     {query.hasNextPage && button(query.isFetchingNextPage ? "Loading more…" : "Load more", () => void query.fetchNextPage(), false, query.isFetching)}
-  </ScrollView>;
+  </ScrollView></>;
 }

@@ -1,9 +1,9 @@
 import { useInfiniteQuery } from "@tanstack/react-query";
 import type { Filters, SearchRequest, SearchResponse, Tab } from "../shared/pull-requests";
 
-export function usePullRequests(rpc: (request: SearchRequest) => Promise<SearchResponse>, tab: Tab, filters: Filters, active: boolean) {
+export function usePullRequests(rpc: (request: SearchRequest) => Promise<SearchResponse>, tab: Tab, filters: Filters, active: boolean, hostId = "") {
   return useInfiniteQuery({
-    queryKey: ["pull-requests", tab, filters],
+    queryKey: ["pull-requests", hostId, tab, filters],
     initialPageParam: 1,
     queryFn: ({ pageParam }) => rpc({ tab, filters, page: pageParam }),
     getNextPageParam: page => page.hasMore ? page.page + 1 : undefined,
