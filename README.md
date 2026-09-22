@@ -1,40 +1,26 @@
 # Pull Requests for Paseo
 
-All your GitHub PRs in Paseo—including private repositories.
+Browse and review GitHub pull requests in Paseo, including private repositories.
 
-![Pull Requests dashboard with private information blurred](images/dashboard.png)
+![Pull request list](images/dashboard.png)
+![Pull request overview](images/pr-details.png)
+![File diff](images/files-diff.png)
 
-![PR details with private information blurred](images/pr-details.png)
+## Installation
 
-![File diffs with private information blurred](images/files-diff.png)
-
-Private information is blurred in all previews.
-
-- **My PRs** (default): authored by or assigned to you, without duplicates.
-- **Awaiting my review**: requests for you or your teams.
-- **Filters**: owner, repository, draft status, relationship, and title.
-- **Review**: descriptions, full-width diffs, comments, approvals, requested changes, checks, and merging.
-- **Paseo integration**: sidebar, workspace panels, `/prs`, PR worktrees, and review agents.
-
-## Install
-
-Requires **Paseo 0.9.x** on the daemon and clients, **npm**, and **gh** on the daemon host. Enable plugins in **Settings → Plugins**, then run as the daemon user:
+Requires Paseo **0.9.x**, npm, and GitHub CLI on the daemon host. Enable **Settings → Plugins**, then run as the daemon user:
 
 ```sh
 gh auth login --hostname github.com
-paseo plugin install npm:paseo-plugin-pull-requests@0.1.0
+paseo plugin install npm:paseo-plugin-pull-requests
 ```
 
-Open **Pull Requests** in the sidebar. All connected clients use the daemon's GitHub account; credentials stay on the host. GitHub permissions and branch protection apply.
+Open **Pull Requests** in the sidebar. Connected clients use the daemon's GitHub account.
 
-[GitHub release](https://github.com/Ironside-Software/pull-requests-paseo-plugin/releases/latest) · [npm](https://www.npmjs.com/package/paseo-plugin-pull-requests) · [MIT license](LICENSE)
+## Features
 
-## Development
-
-```sh
-npm ci --ignore-scripts
-npm run typecheck
-npm test
-```
-
-After local edits: `paseo plugin reload pull-requests`. Diagnose problems with `paseo plugin logs pull-requests`.
+- Authored, assigned, and requested-review PRs with search and filters.
+- Descriptions, diffs, comments, reviews, commits, checks, and merging.
+- Workspace header **PR** button, visible only when Paseo reports a linked PR.
+- Sidebar, Command Center, and workspace panels.
+- Reuse or create PR workspaces; launch Terminal, Codex, Claude, or other ready providers from the **Paseo** menu. Terminal opens its workspace; select the terminal tab manually.

@@ -9,24 +9,24 @@ import { Markdown } from "./markdown";
 import { Diff } from "./diff";
 import { checkState, mergeExplanation, reviewSummary } from "./review-state";
 import { Control } from "./control";
-import { createReviewWorkspace, listWorkspaces, matchingProjects, matchingWorkspaces, reviewPrompt } from "./integration";
+import { WorkspaceLauncher } from "./workspace-launcher";
+import { createReviewWorkspace, listWorkspaces, matchingProjects, matchingWorkspaces, selectWorkspace } from "./integration";
 
-type Props = PluginSurfaceProps & { pr: PrKey; active: boolean; onBack(): void };
-export function PullRequestDetails({ pr, active, onBack, theme, navigation, host, layout }: Props) {
+type Props = PluginSurfaceProps & { pr: PrKey; active: boolean; onBack(): void; workspaceId?: string; backLabel?: string; onRefreshContext?(): void };
+export function PullRequestDetails({ pr, active, onBack, theme, navigation, host, layout, workspaceId, backLabel = "PRs", onRefreshContext }: Props) {
   const c = theme.colors, paseo = usePaseo(), toast = useToast(), cache = useQueryClient();
   const getDetails = useRpc(detailsRpc), getFiles = useRpc(filesRpc), getActivity = useRpc(activityRpc), getChecks = useRpc(checksRpc), getCommits = useRpc(commitsRpc), performAction = useRpc(actionRpc);
   const [section, setSection] = useState<"overview" | "files" | "discussion" | "commits" | "checks">("overview");
   const [body, setBody] = useState("");
   const [filePath, setFilePath] = useState(""), [fileSearch, setFileSearch] = useState("");
-  const [filesOpen, setFilesOpen] = useState(false), [agentOpen, setAgentOpen] = useState(false);
+  const [filesOpen, setFilesOpen] = useState(false);
   const [composer, setComposer] = useState<"comment" | "approve" | "request-changes" | "inline-comment" | "reply" | null>(null);
   const [lineTarget, setLineTarget] = useState<{ path: string; line: number; side: "LEFT" | "RIGHT"; headSha: string } | null>(null);
   const [replyTo, setReplyTo] = useState<number | null>(null), [preview, setPreview] = useState(false);
   const [reviewSha, setReviewSha] = useState("");
   const [width, setWidth] = useState(0);
   const contentScroll = useRef<import("react-native").ScrollView>(null);
-  const [modelSearch, setModelSearch] = useState("");
-  const [confirm, setConfirm] = useState<PrAction | null>(null), [model, setModel] = useState("");
+  const [confirm, setConfirm] = useState<PrAction | null>(null);
   const [integrationError, setIntegrationError] = useState(""), [busy, setBusy] = useState(false);
   const working = useRef(false), submitting = useRef(false);
   const key = ["pull-request", host.id, pr.repository, pr.number];
@@ -46,10 +46,9 @@ export function PullRequestDetails({ pr, active, onBack, theme, navigation, host
     queryFn: ({ pageParam }) => getCommits({ ...pr, page: pageParam }), getNextPageParam: page => page.hasMore ? page.page + 1 : undefined,
     enabled: active && section === "commits", retry: false });
   const workspaces = useQuery({ queryKey: ["pr-workspaces", host.id], queryFn: () => listWorkspaces(paseo), enabled: active && !!navigation, retry: false });
-  const providers = useQuery({ queryKey: ["pr-providers", host.id], queryFn: () => paseo.providers.waitForReady({ timeoutMs: 15000 }), enabled: active && !!navigation, retry: false });
-  const models = providers.data?.entries.filter(p => p.enabled && p.status === "ready").flatMap(p => (p.models ?? []).filter(m => m.isSelectable !== false).map(m => ({ id: `${p.provider}/${m.id}`, label: `${p.label ?? p.provider} · ${m.label}`, isDefault: m.isDefault }))) ?? [];
-  const selectedModel = models.some(m => m.id === model) ? model : (models.find(m => m.isDefault) ?? models[0])?.id ?? "";
   const spaces = data ? matchingWorkspaces(workspaces.data ?? [], data) : [];
+  const [selectedWorkspaceId, setSelectedWorkspaceId] = useState("");
+  const selectedWorkspace = selectWorkspace(spaces, workspaceId, selectedWorkspaceId);
   const projects = matchingProjects(workspaces.data ?? [], pr.repository);
   const [projectId, setProjectId] = useState("");
   const selectedProject = projects.find(p => p.projectId === projectId) ?? projects[0];
@@ -65,18 +64,16 @@ export function PullRequestDetails({ pr, active, onBack, theme, navigation, host
   }
   function error(message: string) { return <Text accessibilityRole="alert" style={{ ...text, color: c.statusDanger }}>{message}</Text>; }
   function link(url: string, label: string) { return <ExternalLink href={url} accessibilityLabel={label} onError={() => toast.error("Could not open the link.")}><Text style={{ ...text, color: c.accent }}>{label}</Text></ExternalLink>; }
-  async function openWorkspace(review = false) {
+  async function openWorkspace() {
     if (!data || !navigation || working.current) return;
     working.current = true; setBusy(true); setIntegrationError("");
     try {
-      if (!spaces[0] && !selectedProject) throw new Error("Open this repository as a project in Paseo first, then refresh.");
-      const workspace = spaces[0] ? paseo.workspaces.ref(spaces[0]) : await createReviewWorkspace(paseo, data, selectedProject!.projectId);
-      await cache.invalidateQueries({ queryKey: ["pr-workspaces", host.id] });
-      if (review) {
-        if (!selectedModel) throw new Error("Configure an available agent provider in Paseo first.");
-        const agent = await workspace.agents.create({ config: { provider: selectedModel }, title: `Review #${pr.number}`, prompt: reviewPrompt(data) });
-        navigation.openAgent({ agentId: agent.id, serverId: host.id });
-      } else navigation.openWorkspace({ workspaceId: workspace.id, serverId: host.id });
+      if (workspaces.isPending || workspaces.error) throw new Error("Refresh workspaces before continuing.");
+      if (spaces.length && !selectedWorkspace) throw new Error("Select a workspace first.");
+      if (!selectedWorkspace && !selectedProject) throw new Error("Open this repository as a project in Paseo first, then refresh.");
+      const workspace = selectedWorkspace ? paseo.workspaces.ref(selectedWorkspace) : await createReviewWorkspace(paseo, data, selectedProject!.projectId);
+      if (!selectedWorkspace) void cache.invalidateQueries({ queryKey: ["pr-workspaces", host.id] });
+      navigation.openWorkspace({ workspaceId: workspace.id, serverId: host.id });
     } catch (err) { setIntegrationError(err instanceof Error ? err.message : "Paseo could not open this PR."); }
     finally { working.current = false; setBusy(false); }
   }
@@ -137,24 +134,19 @@ export function PullRequestDetails({ pr, active, onBack, theme, navigation, host
     {data?.state === "open" && <View style={panel}><Text style={heading}>Merge status</Text><Text style={muted}>{mergeText}</Text>
       {data.canMerge && data.mergeMethods.length > 0 ? button("Merge pull request", () => prepare({ ...pr, action: "merge", method: data.mergeMethods[0], headSha: data.headSha }), false, mutation.isPending, "GitMerge") : !data.draft && data.mergeable !== false && <Text style={muted}>Merging is unavailable for this account or repository.</Text>}
     </View>}
-    {navigation && <View style={panel}><Text style={heading}>Paseo workspace</Text>
-      {button(busy ? "Opening…" : spaces.length ? "Open workspace" : "Create PR worktree", () => void openWorkspace(), false, busy || workspaces.isPending || (!spaces.length && !selectedProject), "FolderGit2")}
-      {button("Review with agent", () => setAgentOpen(true), false, busy, "Bot")}
-      {!workspaces.isPending && !spaces.length && !projects.length && <Text style={muted}>Open this repository in Paseo first to create its PR worktree.</Text>}
-      {workspaces.error && error("Workspaces could not be loaded. Refresh to retry.")}{!!integrationError && error(integrationError)}
-    </View>}
+
   </View>; }
   return <View style={{ flex: 1, backgroundColor: c.surface0 }} onLayout={event => setWidth(event.nativeEvent.layout.width)}>
     <View style={{ paddingHorizontal: layout.compact ? 12 : 20, paddingTop: 8, gap: 8, borderBottomWidth: 1, borderColor: c.border }}>
       <View style={{ ...row, justifyContent: "space-between" }}>
-        <View style={{ ...row, flex: 1, minWidth: 0 }}>{button("PRs", onBack, false, busy || mutation.isPending, "ArrowLeft")}<Text numberOfLines={1} style={{ ...muted, flexShrink: 1 }}>{pr.repository} #{pr.number}</Text></View>
-        {button("Refresh", () => { void cache.invalidateQueries({ queryKey: key }); void workspaces.refetch(); void providers.refetch(); }, false, detail.isFetching, "RefreshCw")}
+        <View style={{ ...row, flex: 1, minWidth: 0 }}>{button(backLabel, onBack, false, busy || mutation.isPending, "ArrowLeft")}<Text numberOfLines={1} style={{ ...muted, flexShrink: 1 }}>{pr.repository} #{pr.number}</Text></View>
+        {button("Refresh", () => { onRefreshContext?.(); void cache.invalidateQueries({ queryKey: key }); void workspaces.refetch(); void cache.invalidateQueries({ queryKey: ["pr-providers", host.id] }); }, false, detail.isFetching, "RefreshCw")}
       </View>
       {data ? <>
         <Text accessibilityRole="header" style={{ ...text, fontSize: layout.compact ? 18 : 21, lineHeight: layout.compact ? 25 : 28, fontWeight: "600" }}>{data.title}</Text>
         <View style={row}><View style={{ ...row, gap: 4, paddingHorizontal: 7, paddingVertical: 2, backgroundColor: c.surface1, borderRadius: 5 }}><Icon name={data.state === "merged" ? "GitMerge" : data.state === "closed" ? "GitPullRequestClosed" : "GitPullRequest"} size={14} color={stateColor} /><Text style={{ ...muted, color: stateColor }}>{data.draft ? "Draft" : data.state[0].toUpperCase() + data.state.slice(1)}</Text></View><Text style={muted}>{data.author}</Text><Text numberOfLines={1} style={{ ...muted, flexShrink: 1 }}>{data.head} → {data.base}</Text></View>
         <View style={{ ...row, justifyContent: "space-between" }}><View style={row}><Text style={{ ...muted, color: c.statusSuccess }}>+{data.additions}</Text><Text style={{ ...muted, color: c.statusDanger }}>−{data.deletions}</Text><Text style={muted}>{data.commits} commits</Text></View><View style={{ ...row, gap: 2 }}>{link(data.url, "GitHub")}{button(data.canReview ? "Review" : "Comment", () => compose("comment"), true, mutation.isPending, "MessageSquare")}{data.canMerge && data.mergeMethods.length > 0 && button("Merge", () => prepare({ ...pr, action: "merge", method: data.mergeMethods[0], headSha: data.headSha }), false, mutation.isPending, "GitMerge")}</View></View>
-      </> : <View style={{ paddingVertical: 16, gap: 10 }}><View style={{ width: "75%", height: 22, backgroundColor: c.surface2, borderRadius: 4 }} /><View style={{ width: "45%", height: 14, backgroundColor: c.surface1, borderRadius: 3 }} /><Text accessibilityLiveRegion="polite" style={muted}>Loading pull request…</Text></View>}
+      </> : <View style={{ paddingVertical: 16, gap: 10 }}><View style={{ width: "75%", height: 22, backgroundColor: c.surface2, borderRadius: 4 }} /><View style={{ width: "45%", height: 14, backgroundColor: c.surface1, borderRadius: 3 }} /><Text accessibilityLiveRegion="polite" style={muted}>{detail.error ? "Pull request unavailable" : "Loading pull request…"}</Text></View>}
       {detail.error && error(`${data ? "Showing previous details. " : ""}${detail.error.message}`)}
       <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ flexGrow: 0 }} contentContainerStyle={{ gap: 4 }}>
         {([['overview', 'Overview'], ['files', `Files${data ? ` ${data.files}` : ""}`], ['discussion', 'Activity'], ['commits', 'Commits'], ['checks', 'Checks']] as const).map(([id,label]) => button(label, () => changeSection(id), section === id, false, undefined, "tab"))}
@@ -163,8 +155,27 @@ export function PullRequestDetails({ pr, active, onBack, theme, navigation, host
     {data && <View style={{ flex: 1, flexDirection: "row" }}>
       {section === "files" && wide && <ScrollView style={{ width: 260, flexGrow: 0, borderRightWidth: 1, borderColor: c.border, backgroundColor: c.surface1 }} contentContainerStyle={{ padding: 12 }}>{fileList}</ScrollView>}
       <ScrollView ref={contentScroll} style={{ flex: 1 }} contentContainerStyle={{ padding: layout.compact ? 12 : 20, gap: 18 }} keyboardShouldPersistTaps="handled">
-        {section === "overview" && <View style={{ flexDirection: wide ? "row" : "column", gap: wide ? 28 : 20 }}>
-          <View style={{ flex: wide ? 1 : undefined, minWidth: 0, gap: 16 }}><View style={{ ...row, justifyContent: "space-between" }}><Text style={heading}>Description</Text><Text style={muted}>Updated {new Date(data.updatedAt).toLocaleDateString()}</Text></View>
+        {section === "overview" && <View style={{ flexDirection: wide ? "row" : "column", gap: wide ? 28 : 20, width: "100%", maxWidth: 1120, alignSelf: "center" }}>
+          <View style={{ flex: wide ? 1 : undefined, minWidth: 0, gap: 16 }}>
+        {navigation && <View style={{ gap: 8, paddingVertical: 8 }}>
+          {spaces.length > 1 && <View accessibilityRole="radiogroup" accessibilityLabel="PR workspace" style={row}>
+            {spaces.map(space => button(space.name, () => setSelectedWorkspaceId(space.id), selectedWorkspace?.id === space.id, busy, undefined, "radio"))}
+          </View>}
+          {!spaces.length && projects.length > 1 && <View accessibilityRole="radiogroup" accessibilityLabel="Worktree project" style={row}>
+            {projects.map(project => button(project.projectRootPath, () => setProjectId(project.projectId), selectedProject?.projectId === project.projectId, busy, undefined, "radio"))}
+          </View>}
+          <View style={row}>
+            {button(busy ? "Opening…" : spaces.length ? "Open workspace" : "Create PR worktree", () => void openWorkspace(), false, busy || workspaces.isPending || !!workspaces.error || (spaces.length ? !selectedWorkspace : !selectedProject), "FolderGit2")}
+
+          </View>
+          {selectedWorkspace && <WorkspaceLauncher key={selectedWorkspace.id} theme={theme} layout={layout} host={host} navigation={navigation}
+            workspace={selectedWorkspace} number={pr.number} disabled={busy || !!workspaces.error} onBusyChange={setBusy} />}
+          {workspaces.isPending && <Text style={muted}>Loading workspaces…</Text>}
+          {!workspaces.isPending && !workspaces.error && !spaces.length && !projects.length && <Text style={muted}>Open this repository in Paseo first to create its PR worktree.</Text>}
+          {!!spaces.length && !selectedWorkspace && <Text style={muted}>Select a workspace to continue.</Text>}
+          {workspaces.error && error("Workspaces could not be loaded. Refresh to retry.")}{!!integrationError && error(integrationError)}
+        </View>}
+<View style={{ ...row, justifyContent: "space-between" }}><Text style={heading}>Description</Text><Text style={muted}>Updated {new Date(data.updatedAt).toLocaleDateString()}</Text></View>
             <View style={{ maxWidth: 760 }}><Markdown body={data.body || "No description provided."} theme={theme} baseUrl={data.url} /></View>
             <View style={{ ...row, marginTop: 8, paddingTop: 16, borderTopWidth: 1, borderColor: c.border }}>{button("View conversation", () => changeSection("discussion"), false, false, "MessagesSquare")}{button("Browse changes", () => changeSection("files"), false, false, "FileDiff")}</View>
           </View>
@@ -222,16 +233,6 @@ export function PullRequestDetails({ pr, active, onBack, theme, navigation, host
         {preview ? <View style={{ minHeight: 160 }}><Markdown body={body || "Nothing to preview yet."} theme={theme} baseUrl={data?.url ?? "https://github.com"} /></View> : <TextInput accessibilityLabel="Comment or review body" multiline maxLength={65536} placeholder={composer === "approve" ? "Optional review summary…" : "Write a comment… Markdown is supported."} placeholderTextColor={c.foregroundMuted} value={body} onChangeText={setBody} style={{ ...inputStyle, minHeight: 160, textAlignVertical: "top" }} />}
         {data && reviewSha && data.headSha !== reviewSha && composer !== "comment" && composer !== "reply" && <Text style={{ ...text, color: c.statusWarning }}>New commits arrived while you were writing. Your text is saved; close this form and review the latest changes.</Text>}
         <View style={{ ...row, justifyContent: "flex-end" }}>{button("Close", () => setComposer(null))}{button(composer === "approve" ? "Submit approval…" : composer === "request-changes" ? "Request changes…" : "Post comment…", submitDraft, true, (composer !== "approve" && !body.trim()) || mutation.isPending)}</View>
-      </Modal.Content>
-    </Modal>
-    <Modal title="Review in Paseo" open={agentOpen} onOpenChange={setAgentOpen}>
-      <Modal.Content contentContainerStyle={{ padding: 18, gap: 14 }}><Text style={text}>Start an agent in this PR's workspace. Its findings stay in Paseo for you to review.</Text>
-        {projects.length > 1 && !spaces.length && <View style={row}>{projects.map(project => button(project.projectRootPath, () => setProjectId(project.projectId), selectedProject?.projectId === project.projectId, busy, undefined, "radio"))}</View>}
-        <Text style={heading}>Model</Text><TextInput accessibilityLabel="Search models" placeholder="Search models…" placeholderTextColor={c.foregroundMuted} value={modelSearch} onChangeText={setModelSearch} style={inputStyle} />
-        {providers.isPending && <Text style={muted}>Loading agent providers…</Text>}{providers.error && error("Could not load models. Refresh to retry.")}
-        <View style={{ maxHeight: 240 }}><ScrollView nestedScrollEnabled>{models.filter(m => m.label.toLowerCase().includes(modelSearch.toLowerCase())).map(m => <View key={m.id} style={{ alignItems: "flex-start" }}>{button(m.label, () => setModel(m.id), selectedModel === m.id, busy, undefined, "radio")}</View>)}</ScrollView></View>
-        {!spaces.length && !selectedProject && <Text style={muted}>Open this repository as a Paseo project first, then refresh.</Text>}{integrationError && error(integrationError)}
-        {button(busy ? "Starting…" : "Start review agent", () => void openWorkspace(true), true, busy || !selectedModel || (!spaces.length && !selectedProject), "Bot")}
       </Modal.Content>
     </Modal>
     <Modal title={confirm?.action === "merge" ? "Merge pull request?" : "Submit to GitHub?"} open={!!confirm} onOpenChange={open => { if (!open && !mutation.isPending) setConfirm(null); }}>
