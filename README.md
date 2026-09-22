@@ -4,7 +4,11 @@ All your GitHub PRs in Paseo—including private repositories.
 
 ![Pull Requests dashboard with private information blurred](images/dashboard.png)
 
-[PR details](images/pr-details.png) · [File diffs](images/files-diff.png) — private information blurred in all previews.
+![PR details with private information blurred](images/pr-details.png)
+
+![File diffs with private information blurred](images/files-diff.png)
+
+Private information is blurred in all previews.
 
 - **My PRs** (default): authored by or assigned to you, without duplicates.
 - **Awaiting my review**: requests for you or your teams.
