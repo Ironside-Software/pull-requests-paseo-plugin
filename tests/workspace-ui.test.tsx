@@ -162,7 +162,7 @@ test("workspace actions select valid provider models, require workspace selectio
 });
 
 test("preview, split diff and PR metadata controls reach the intended RPCs", async () => {
-  changedFiles = [{ path: "src/app.ts", previousPath: null, status: "modified", additions: 1, deletions: 1, patch: "@@ -1 +1 @@\n-const oldValue = 1;\n+const newValue = 2;", url: "https://github.com/acme/widget/blob/feature/src/app.ts" }];
+  changedFiles = [{ path: "src/app.ts", previousPath: null, status: "modified", additions: 1, deletions: 1, patch: "@@ -1,2 +1,2 @@\n same\n-const oldValue = 1;\n+const newValue = 2;", url: "https://github.com/acme/widget/blob/feature/src/app.ts" }];
   const cache = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   let root!: ReactTestRenderer;
   const button = (label: string) => root.root.findAll(node => String(node.type) === "Pressable" && node.props.accessibilityLabel === label)[0];
@@ -196,9 +196,25 @@ test("preview, split diff and PR metadata controls reach the intended RPCs", asy
     assert.deepEqual(lastEdit(), { repository: "acme/widget", number: 42, action: "change-base", base: "release", expectedBase: "main" });
     await act(async () => root.root.findAll(node => typeof node.props.onLayout === "function")[0].props.onLayout({ nativeEvent: { layout: { width: 1100 } } }));
     await click("Files 1"); await click("Split");
-    assert.ok(button("Comment on src/app.ts old line 1")); assert.ok(button("Comment on src/app.ts new line 1"));
+    assert.equal(root.root.findAll(node => String(node.type) === "Pressable" && node.props.accessibilityLabel === "Comment on src/app.ts new line 1").length, 2);
+    assert.equal(root.root.findAll(node => String(node.type) === "Pressable" && node.props.accessibilityLabel === "Comment on src/app.ts old line 1").length, 0);
+    assert.ok(button("Comment on src/app.ts old line 2"));
     assert.match(JSON.stringify(root.toJSON()), /#ff7b72/);
   } finally { await act(async () => root.unmount()); cache.clear(); changedFiles = []; }
+});
+
+test("preview links are cached per Paseo host", async () => {
+  const cache = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  listItems = [{ ...details, id: 42, authored: true, assigned: false }];
+  requests = [];
+  let root!: ReactTestRenderer;
+  const render = (host: string) => <QueryClientProvider client={cache}><PullRequestsSurface {...props} host={{ ...props.host, id: host }} /></QueryClientProvider>;
+  try {
+    await act(async () => { root = create(render("host-one")); }); await act(tick);
+    assert.equal(requests.filter(request => request.name.endsWith(".preview-for-pr")).length, 1);
+    await act(async () => root.update(render("host-two"))); await act(tick);
+    assert.equal(requests.filter(request => request.name.endsWith(".preview-for-pr")).length, 2);
+  } finally { await act(async () => root.unmount()); cache.clear(); listItems = []; }
 });
 
 

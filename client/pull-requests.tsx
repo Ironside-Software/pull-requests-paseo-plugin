@@ -13,9 +13,9 @@ import { listWorkspaces } from "./integration";
 import { PrWorkspaceActions } from "./workspace-launcher";
 import { labelColors } from "./label-color";
 
-function PreviewLink({ pr, active, color }: { pr: PullRequest; active: boolean; color: string }) {
+function PreviewLink({ pr, active, color, hostId }: { pr: PullRequest; active: boolean; color: string; hostId: string }) {
   const rpc = useRpc(previewForPrRpc);
-  const preview = useQuery({ queryKey: ["pull-request", pr.repository, pr.number, "preview-for-pr", pr.updatedAt], queryFn: () => rpc({ repository: pr.repository, number: pr.number }), enabled: active, staleTime: 300_000, retry: false });
+  const preview = useQuery({ queryKey: ["pull-request", hostId, pr.repository, pr.number, "preview-for-pr", pr.updatedAt], queryFn: () => rpc({ repository: pr.repository, number: pr.number }), enabled: active, staleTime: 300_000, retry: false });
   return preview.data?.url ? <ExternalLink href={preview.data.url} accessibilityLabel={`Open preview for ${pr.repository} pull request ${pr.number}`}><Text style={{ color, fontSize: 12 }}>Preview</Text></ExternalLink> : null;
 }
 
@@ -185,7 +185,7 @@ export function PullRequestsSurface(props: PluginSurfaceProps & { initialReposit
       </View>
       {!!pr.labels?.length && <View style={styles.row}>{pr.labels.map(label => <Text key={label.name} style={[styles.badge, labelColors(label.color)]}>{label.name}</Text>)}</View>}
     </Pressable>
-      <PreviewLink pr={pr} active={active && !selectedPr} color={c.accent} />
+      <PreviewLink pr={pr} active={active && !selectedPr} color={c.accent} hostId={props.host.id} />
       {props.navigation && workspaces.isSuccess && <PrWorkspaceActions {...props} pr={pr} workspaces={workspaces.data} onSetup={() => setSelectedPr({ repository: pr.repository, number: pr.number })} />}
     </View>} ListFooterComponent={query.hasNextPage ? button(query.isFetchingNextPage ? "Loading more…" : "Load more", () => void query.fetchNextPage(), false, query.isFetching) : null} />
   </>;

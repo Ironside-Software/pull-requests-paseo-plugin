@@ -1,32 +1,43 @@
 import type { PluginClientContext, PluginButtonRegistration } from "@getpaseo/plugin/client";
 import { Linking } from "react-native";
-import { detailsRpc, previewRpc } from "../shared/details";
+import { previewForPrRpc } from "../shared/details";
 import { githubPullRequest, type PaseoWorkspace } from "./integration";
 
 export function registerPrHeaders(client: PluginClientContext) {
   const buttons = new Map<string, PluginButtonRegistration>();
   const previews = new Map<string, PluginButtonRegistration>();
   const lastPreviewCheck = new Map<string, { key: string; time: number }>();
+  const workspaces = new Map<string, PaseoWorkspace>();
+  const queue = new Map<string, { key: NonNullable<ReturnType<typeof githubPullRequest>>; check: { key: string; time: number } }>();
   const pages: Set<string>[] = [];
   const releases: (() => Promise<void>)[] = [];
-  let stopped = false;
+  let stopped = false, active = 0;
   function remove(id: string) {
     buttons.get(id)?.remove();
     buttons.delete(id);
     previews.get(id)?.remove();
     previews.delete(id);
     lastPreviewCheck.delete(id);
+    workspaces.delete(id);
+    queue.delete(id);
   }
   async function refreshPreview(workspaceId: string, key: NonNullable<ReturnType<typeof githubPullRequest>>, check: { key: string; time: number }) {
     try {
-      const details = await client.rpc(detailsRpc, key);
-      const preview = await client.rpc(previewRpc, { ...key, headSha: details.headSha, mergeSha: details.mergeSha });
+      const preview = await client.rpc(previewForPrRpc, key);
       if (stopped || !buttons.has(workspaceId) || lastPreviewCheck.get(workspaceId) !== check) return;
       if (!preview.url) { previews.get(workspaceId)?.remove(); previews.delete(workspaceId); return; }
       const button = { title: `Open ${preview.environment ?? "preview"} deployment`, label: "Preview", icon: "ExternalLink", behavior: { kind: "action" as const, onPress: () => Linking.openURL(preview.url!) } };
       if (previews.has(workspaceId)) previews.get(workspaceId)!.update(button);
       else previews.set(workspaceId, client.addHeaderButton({ id: `preview-pr-${workspaceId.replace(/[^a-z0-9-]/gi, "-").toLowerCase()}`, workspaceId, button }));
     } catch { /* A missing deployment or GitHub access must not hide the PR button. */ }
+  }
+  function pump() {
+    while (!stopped && active < 4 && queue.size) {
+      const [id, task] = queue.entries().next().value!;
+      queue.delete(id);
+      active++;
+      void refreshPreview(id, task.key, task.check).finally(() => { active--; pump(); });
+    }
   }
   function update(workspace: PaseoWorkspace) {
     if (stopped) return;
@@ -35,6 +46,7 @@ export function registerPrHeaders(client: PluginClientContext) {
       remove(workspace.id);
       return;
     }
+    workspaces.set(workspace.id, workspace);
     if (!buttons.has(workspace.id)) buttons.set(workspace.id, client.addHeaderButton({
       id: `open-pr-${workspace.id.replace(/[^a-z0-9-]/gi, "-").toLowerCase()}`,
       workspaceId: workspace.id,
@@ -46,8 +58,10 @@ export function registerPrHeaders(client: PluginClientContext) {
     if (checked?.key === current && Date.now() - checked.time < 60_000) return;
     const check = { key: current, time: Date.now() };
     lastPreviewCheck.set(workspace.id, check);
-    void refreshPreview(workspace.id, key, check);
+    queue.set(workspace.id, { key, check });
+    pump();
   }
+  const timer = setInterval(() => { for (const workspace of workspaces.values()) update(workspace); }, 60_000);
   const ready = (async () => {
     let cursor: string | undefined;
     do {
@@ -79,6 +93,7 @@ export function registerPrHeaders(client: PluginClientContext) {
   });
   return async () => {
     stopped = true;
+    clearInterval(timer);
     for (const id of buttons.keys()) remove(id);
     await Promise.allSettled(releases.map(release => release()));
     await ready;

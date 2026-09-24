@@ -82,9 +82,10 @@ test("preview header button opens the deployment beside the PR button", async ()
     paseo: { workspaces: { list: async () => ({ entries: [workspace("wks_preview")], pageInfo: {}, subscription: {
       subscribe(observer: any) { observer.snapshot({ entries: [workspace("wks_preview")] }); return () => {}; }, release: async () => {},
     } }) } },
-    rpc: async (contract: any) => contract.name.endsWith(".details")
-      ? { headSha: "a".repeat(40), mergeSha: null }
-      : { url: "https://preview.example.test/", environment: "Preview" },
+    rpc: async (contract: any) => {
+      assert.equal(contract.name, "pull-requests.preview-for-pr");
+      return { url: "https://preview.example.test/", environment: "Preview" };
+    },
     addHeaderButton(contribution: any) {
       registered.set(contribution.id, contribution);
       return { remove: () => registered.delete(contribution.id), update: (patch: any) => { contribution.button = { ...contribution.button, ...patch }; } };
@@ -99,4 +100,44 @@ test("preview header button opens the deployment beside the PR button", async ()
   assert.deepEqual(openedUrls, ["https://preview.example.test/"]);
   await stop();
   assert.equal(registered.size, 0);
+});
+
+test("header preview checks are bounded and refresh without workspace updates", async () => {
+  const entries = Array.from({ length: 9 }, (_, index) => workspace(`wks_${index}`));
+  const pending: (() => void)[] = [];
+  const originalNow = Date.now, originalSetInterval = globalThis.setInterval, originalClearInterval = globalThis.clearInterval;
+  let now = originalNow(), interval!: () => void, active = 0, peak = 0, calls = 0;
+  Date.now = () => now;
+  globalThis.setInterval = ((callback: () => void) => { interval = callback; return 1; }) as typeof setInterval;
+  globalThis.clearInterval = (() => {}) as typeof clearInterval;
+  const client = {
+    paseo: { workspaces: { list: async () => ({ entries, pageInfo: {}, subscription: {
+      subscribe(observer: any) { observer.snapshot({ entries }); return () => {}; }, release: async () => {},
+    } }) } },
+    rpc: async (contract: any) => {
+      assert.equal(contract.name, "pull-requests.preview-for-pr");
+      calls++; active++; peak = Math.max(peak, active);
+      return new Promise(resolve => pending.push(() => { active--; resolve({ url: null, environment: null }); }));
+    },
+    addHeaderButton: () => ({ remove() {}, update() {} }),
+  } as unknown as PluginClientContext;
+  const stop = registerPrHeaders(client);
+  try {
+    await tick();
+    assert.equal(calls, 4);
+    pending.shift()!(); await tick();
+    assert.equal(calls, 5);
+    while (pending.length) { pending.shift()!(); await tick(); }
+    assert.equal(calls, entries.length);
+    now += 60_000;
+    interval(); await tick();
+    assert.equal(calls, entries.length + 4);
+    assert.equal(peak, 4);
+    while (pending.length) { pending.shift()!(); await tick(); }
+  } finally {
+    await stop();
+    Date.now = originalNow;
+    globalThis.setInterval = originalSetInterval;
+    globalThis.clearInterval = originalClearInterval;
+  }
 });

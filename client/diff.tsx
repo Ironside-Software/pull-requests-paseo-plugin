@@ -38,7 +38,7 @@ export function Diff({ patch, path, theme, compact, split, canComment, onComment
   function lineCell(index: number | null, side?: "LEFT" | "RIGHT") {
     if (index === null) return <View style={{ flex: 1, minWidth: split ? 450 : undefined, minHeight: 22 }} />;
     const line = lines[index], color = line.kind === "added" ? c.statusSuccess : line.kind === "removed" ? c.statusDanger : null;
-    const targetSide = side ?? (line.newLine === null ? "LEFT" : "RIGHT");
+    const targetSide = line.kind === "context" ? "RIGHT" : side ?? (line.newLine === null ? "LEFT" : "RIGHT");
     const number = targetSide === "LEFT" ? line.oldLine : line.newLine;
     return <View style={{ flex: 1, minWidth: split ? 450 : undefined, flexDirection: "row", alignItems: "stretch", minHeight: 22 }}>
       {color && <View pointerEvents="none" style={{ position: "absolute", top: 0, bottom: 0, left: 0, right: 0, backgroundColor: color, opacity: 0.1 }} />}
