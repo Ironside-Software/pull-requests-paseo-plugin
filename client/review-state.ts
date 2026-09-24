@@ -15,6 +15,21 @@ export function parseDiff(patch: string): DiffLine[] {
     return { kind: "context", text: line.slice(1), oldLine: oldLine++, newLine: newLine++ };
   });
 }
+export type SplitDiffRow = { left: number | null; right: number | null; header: number | null };
+export function splitDiff(lines: DiffLine[]): SplitDiffRow[] {
+  const rows: SplitDiffRow[] = [];
+  for (let i = 0; i < lines.length;) {
+    if (lines[i].kind === "added" || lines[i].kind === "removed") {
+      const removed: number[] = [], added: number[] = [];
+      while (i < lines.length && (lines[i].kind === "added" || lines[i].kind === "removed")) {
+        (lines[i].kind === "removed" ? removed : added).push(i++);
+      }
+      for (let j = 0; j < Math.max(removed.length, added.length); j++) rows.push({ left: removed[j] ?? null, right: added[j] ?? null, header: null });
+    } else if (lines[i].kind === "context") rows.push({ left: i, right: i++, header: null });
+    else rows.push({ left: null, right: null, header: i++ });
+  }
+  return rows;
+}
 export function reviewSummary(items: PrActivity[]) {
   const latest = new Map<string, PrActivity>();
   for (const item of [...items].sort((a,b) => a.date.localeCompare(b.date))) {

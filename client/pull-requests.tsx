@@ -1,15 +1,23 @@
 import { usePaseo, useRpc, type PluginSurfaceProps } from "@getpaseo/plugin/client";
 import { Icon } from "@getpaseo/plugin/client/react-native";
+import { ExternalLink } from "@getpaseo/plugin/client/ui";
 import { PullRequestDetails } from "./details";
-import type { PrKey } from "../shared/details";
+import { previewForPrRpc, type PrKey } from "../shared/details";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { AppState, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
-import { defaultFilters, filtersSchema, pullRequestsRpc, type Filters, type Tab } from "../shared/pull-requests";
+import { AppState, FlatList, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
+import { defaultFilters, filtersSchema, pullRequestsRpc, type Filters, type PullRequest, type Tab } from "../shared/pull-requests";
 import { Control } from "./control";
 import { usePullRequests } from "./state";
 import { useQuery } from "@tanstack/react-query";
 import { listWorkspaces } from "./integration";
 import { PrWorkspaceActions } from "./workspace-launcher";
+import { labelColors } from "./label-color";
+
+function PreviewLink({ pr, active, color }: { pr: PullRequest; active: boolean; color: string }) {
+  const rpc = useRpc(previewForPrRpc);
+  const preview = useQuery({ queryKey: ["pull-request", pr.repository, pr.number, "preview-for-pr", pr.updatedAt], queryFn: () => rpc({ repository: pr.repository, number: pr.number }), enabled: active, staleTime: 300_000, retry: false });
+  return preview.data?.url ? <ExternalLink href={preview.data.url} accessibilityLabel={`Open preview for ${pr.repository} pull request ${pr.number}`}><Text style={{ color, fontSize: 12 }}>Preview</Text></ExternalLink> : null;
+}
 
 export function PullRequestsSurface(props: PluginSurfaceProps & { initialRepository?: string; initialPr?: PrKey; workspaceId?: string; onRefreshContext?(): void }) {
   const { theme, layout } = props;
@@ -88,7 +96,7 @@ export function PullRequestsSurface(props: PluginSurfaceProps & { initialReposit
 
   return <>
     {selectedPr && <PullRequestDetails {...props} key={`${selectedPr.repository}#${selectedPr.number}`} pr={selectedPr} active={active} workspaceId={props.workspaceId} backLabel={props.initialRepository ? "Repository PRs" : "PRs"} onRefreshContext={props.onRefreshContext} onBack={() => { workspacePrHandled.current = true; setSelectedPr(null); void query.refetch(); }} />}
-    <ScrollView style={[styles.screen, !!selectedPr && { display: "none" }]} contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+    <FlatList data={items} keyExtractor={pr => String(pr.id)} style={[styles.screen, !!selectedPr && { display: "none" }]} contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled" ListHeaderComponent={<>
     {props.initialPr && <View style={styles.row}>
       <Control theme={theme} compact={layout.compact} label="Open workspace PR" icon="GitPullRequest" onPress={() => setSelectedPr(props.initialPr!)} />
       <Text style={styles.subtitle}>{props.initialPr.repository} #{props.initialPr.number}</Text>
@@ -165,7 +173,7 @@ export function PullRequestsSurface(props: PluginSurfaceProps & { initialReposit
     </View>}
     {props.navigation && workspaces.isPending && <Text style={styles.subtitle}>Loading Paseo workspaces…</Text>}
     {props.navigation && workspaces.error && <View style={styles.row}><Text accessibilityRole="alert" style={styles.error}>Paseo workspaces unavailable.</Text>{button("Retry workspaces", () => void workspaces.refetch(), false, workspaces.isFetching)}</View>}
-    <View>{items.map(pr => <View key={pr.id} style={{ flexDirection: "row", alignItems: "center", gap: 8, borderBottomWidth: 1, borderColor: c.border }}>
+    </>} renderItem={({ item: pr }) => <View style={{ flexDirection: "row", alignItems: "center", gap: 8, borderBottomWidth: 1, borderColor: c.border }}>
       <Pressable accessibilityRole="button" accessibilityLabel={`Open ${pr.repository} pull request ${pr.number}: ${pr.title}`} onPress={() => setSelectedPr({ repository: pr.repository, number: pr.number })} onHoverIn={() => setHoveredPr(pr.id)} onHoverOut={() => setHoveredPr(null)} onFocus={() => setFocusedPr(pr.id)} onBlur={() => setFocusedPr(null)}
       accessibilityState={{ selected: selectedPr?.repository === pr.repository && selectedPr.number === pr.number }}
       style={({ pressed }) => [styles.card, { flex: 1, minWidth: 0, paddingHorizontal: 6, borderRadius: 5, borderWidth: 1, borderColor: focusedPr === pr.id ? c.accent : "transparent", borderBottomColor: focusedPr === pr.id ? c.accent : "transparent", backgroundColor: pressed || hoveredPr === pr.id ? c.surface2 : c.surface0 }]}>
@@ -175,9 +183,10 @@ export function PullRequestsSurface(props: PluginSurfaceProps & { initialReposit
         <Text numberOfLines={1} style={[styles.subtitle, { flexShrink: 1 }]}>{pr.repository} #{pr.number} · {pr.author} · {new Date(pr.updatedAt).toLocaleDateString()}</Text>
         {pr.draft && <Text style={styles.badge}>Draft</Text>}
       </View>
+      {!!pr.labels?.length && <View style={styles.row}>{pr.labels.map(label => <Text key={label.name} style={[styles.badge, labelColors(label.color)]}>{label.name}</Text>)}</View>}
     </Pressable>
+      <PreviewLink pr={pr} active={active && !selectedPr} color={c.accent} />
       {props.navigation && workspaces.isSuccess && <PrWorkspaceActions {...props} pr={pr} workspaces={workspaces.data} onSetup={() => setSelectedPr({ repository: pr.repository, number: pr.number })} />}
-    </View>)}</View>
-    {query.hasNextPage && button(query.isFetchingNextPage ? "Loading more…" : "Load more", () => void query.fetchNextPage(), false, query.isFetching)}
-  </ScrollView></>;
+    </View>} ListFooterComponent={query.hasNextPage ? button(query.isFetchingNextPage ? "Loading more…" : "Load more", () => void query.fetchNextPage(), false, query.isFetching) : null} />
+  </>;
 }

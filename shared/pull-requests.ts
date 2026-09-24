@@ -1,5 +1,6 @@
 import { defineRpc } from "@getpaseo/plugin";
 import { z } from "zod";
+import { labelSchema } from "./details";
 
 const owner = z.string().trim().max(100).regex(/^$|^[a-zA-Z0-9][a-zA-Z0-9-]*$/);
 const repository = z.string().trim().max(201).regex(/^$|^(?:[a-zA-Z0-9][a-zA-Z0-9-]*\/)?[a-zA-Z0-9_.-]+$/);
@@ -29,7 +30,7 @@ export const pullRequestSchema = z.object({
   id: z.number(), number: z.number(), title: z.string(),
   url: z.string().regex(/^https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/\d+$/),
   repository: z.string(), author: z.string(), draft: z.boolean(),
-  updatedAt: z.string(), authored: z.boolean(), assigned: z.boolean(),
+  updatedAt: z.string(), authored: z.boolean(), assigned: z.boolean(), labels: z.array(labelSchema),
 });
 export const responseSchema = z.object({
   login: z.string(), items: z.array(pullRequestSchema), total: z.number().int().nonnegative(),

@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { z } from "zod";
+import { labelSchema } from "../shared/details";
 import { requestSchema, responseSchema, type SearchRequest, type SearchResponse } from "../shared/pull-requests";
 
 const exec = promisify(execFile);
@@ -11,7 +12,7 @@ const githubSearchSchema = z.object({
     id: z.number(), number: z.number(), title: z.string(), html_url: z.string(),
     repository_url: z.string().regex(/^https:\/\/api\.github\.com\/repos\/[^/]+\/[^/]+$/),
     user: z.object({ login: z.string() }).nullable(),
-    assignees: z.array(z.object({ login: z.string() })),
+    assignees: z.array(z.object({ login: z.string() })), labels: z.array(labelSchema),
     draft: z.boolean().optional(), updated_at: z.string(), pull_request: z.object({}).passthrough(),
   })),
 });
@@ -45,7 +46,7 @@ export function githubError(error: unknown): Error {
   return new Error("Could not load pull requests from GitHub. Check the daemon's network connection and GitHub access, then refresh.");
 }
 
-export async function runGh(args: string[], method: "GET" | "POST" | "PUT" = "GET"): Promise<unknown> {
+export async function runGh(args: string[], method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE" = "GET"): Promise<unknown> {
   let stdout: string;
   try {
     ({ stdout } = await exec("gh", ["api", "--hostname", "github.com", "--method", method, ...args], {
@@ -76,6 +77,7 @@ export async function listPullRequests(input: SearchRequest, api = runGh): Promi
     author: pr.user?.login ?? "Deleted user", draft: pr.draft ?? false, updatedAt: pr.updated_at,
     authored: pr.user?.login.toLowerCase() === login.toLowerCase(),
     assigned: pr.assignees.some(user => user.login.toLowerCase() === login.toLowerCase()),
+    labels: pr.labels,
   }])).values()];
   return responseSchema.parse({ login, items, total: data.total_count, page: request.page,
     hasMore: request.page * 100 < Math.min(data.total_count, 1000) && data.items.length > 0, warnings });
