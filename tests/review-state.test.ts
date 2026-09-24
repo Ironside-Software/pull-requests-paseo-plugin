@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { parseDiff, reviewSummary, checkState, safeLink, mergeExplanation } from "../client/review-state";
+import { parseDiff, splitDiff, reviewSummary, checkState, safeLink, mergeExplanation } from "../client/review-state";
 import { marked } from "marked";
 import type { PrActivity } from "../shared/details";
 
@@ -8,6 +8,12 @@ test("diff line numbers respect context, deletions, additions and multiple hunks
   const lines = parseDiff("@@ -5,3 +5,3 @@\n context\n-old\n+new\n last\n@@ -20,0 +21,2 @@\n+first\n+second\n\\ No newline at end of file");
   assert.deepEqual(lines.map(l => [l.kind, l.oldLine, l.newLine]), [["hunk",null,null],["context",5,5],["removed",6,null],["added",null,6],["context",7,7],["hunk",null,null],["added",null,21],["added",null,22],["note",null,null]]);
   assert.equal(lines[3].text, "new");
+});
+test("split diff aligns edits and keeps each side's comment line", () => {
+  const lines = parseDiff("@@ -5,4 +5,3 @@\n before\n-first\n-second\n+replacement\n after");
+  const rows = splitDiff(lines);
+  assert.deepEqual(rows.map(row => [row.header === null ? null : lines[row.header].kind, row.left === null ? null : lines[row.left].oldLine, row.right === null ? null : lines[row.right].newLine]),
+    [["hunk", null, null], [null, 5, 5], [null, 6, 6], [null, 7, null], [null, 8, 7]]);
 });
 test("review summaries retain the last decision rather than treating comments as approval", () => {
   const review = (state: string, date: string) => ({ id: date, kind: "review", author: "reviewer", state, date }) as PrActivity;

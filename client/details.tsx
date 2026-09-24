@@ -4,22 +4,28 @@ import { Icon, Modal, ScrollView, TextInput, useToast } from "@getpaseo/plugin/c
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRef, useState } from "react";
 import { Pressable, Text, View } from "react-native";
-import { actionRpc, actionSchema, activityRpc, checksRpc, detailsRpc, filesRpc, commitsRpc, type PrAction, type PrKey } from "../shared/details";
+import { actionRpc, actionSchema, activityRpc, checksRpc, detailsRpc, filesRpc, commitsRpc, previewRpc, labelsRpc, branchesRpc, editRpc, type PrAction, type PrEdit, type PrKey } from "../shared/details";
 import { Markdown } from "./markdown";
 import { Diff } from "./diff";
 import { checkState, mergeExplanation, reviewSummary } from "./review-state";
 import { Control } from "./control";
 import { WorkspaceLauncher } from "./workspace-launcher";
 import { createReviewWorkspace, listWorkspaces, matchingProjects, matchingWorkspaces, selectWorkspace } from "./integration";
+import { labelColors } from "./label-color";
 
 type Props = PluginSurfaceProps & { pr: PrKey; active: boolean; onBack(): void; workspaceId?: string; backLabel?: string; onRefreshContext?(): void };
 export function PullRequestDetails({ pr, active, onBack, theme, navigation, host, layout, workspaceId, backLabel = "PRs", onRefreshContext }: Props) {
   const c = theme.colors, paseo = usePaseo(), toast = useToast(), cache = useQueryClient();
-  const getDetails = useRpc(detailsRpc), getFiles = useRpc(filesRpc), getActivity = useRpc(activityRpc), getChecks = useRpc(checksRpc), getCommits = useRpc(commitsRpc), performAction = useRpc(actionRpc);
+  const getDetails = useRpc(detailsRpc), getFiles = useRpc(filesRpc), getActivity = useRpc(activityRpc), getChecks = useRpc(checksRpc), getCommits = useRpc(commitsRpc), getPreview = useRpc(previewRpc), getLabels = useRpc(labelsRpc), getBranches = useRpc(branchesRpc), performAction = useRpc(actionRpc), performEdit = useRpc(editRpc);
   const [section, setSection] = useState<"overview" | "files" | "discussion" | "commits" | "checks">("overview");
   const [body, setBody] = useState("");
   const [filePath, setFilePath] = useState(""), [fileSearch, setFileSearch] = useState("");
   const [filesOpen, setFilesOpen] = useState(false);
+  const [splitView, setSplitView] = useState(false);
+  const [editor, setEditor] = useState<"labels" | "assignees" | "reviewers" | "base" | null>(null);
+  const [editName, setEditName] = useState(""), [baseTarget, setBaseTarget] = useState("");
+  const [focusedChoice, setFocusedChoice] = useState("");
+  const [hoveredChoice, setHoveredChoice] = useState("");
   const [composer, setComposer] = useState<"comment" | "approve" | "request-changes" | "inline-comment" | "reply" | null>(null);
   const [lineTarget, setLineTarget] = useState<{ path: string; line: number; side: "LEFT" | "RIGHT"; headSha: string } | null>(null);
   const [replyTo, setReplyTo] = useState<number | null>(null), [preview, setPreview] = useState(false);
@@ -33,6 +39,13 @@ export function PullRequestDetails({ pr, active, onBack, theme, navigation, host
   const refreshOptions = { enabled: active, refetchInterval: active ? 60_000 : false as const, refetchIntervalInBackground: false, retry: false as const };
   const detail = useQuery({ queryKey: [...key, "details"], queryFn: () => getDetails(pr), ...refreshOptions });
   const data = detail.data;
+  const deployment = useQuery({ queryKey: [...key, "preview", data?.headSha, data?.mergeSha], queryFn: () => getPreview({ ...pr, headSha: data!.headSha, mergeSha: data!.mergeSha }), ...refreshOptions, enabled: active && !!data });
+  const labels = useInfiniteQuery({ queryKey: [...key, "labels"], initialPageParam: 1,
+    queryFn: ({ pageParam }) => getLabels({ ...pr, page: pageParam }), getNextPageParam: page => page.hasMore ? page.page + 1 : undefined,
+    enabled: active && editor === "labels", retry: false });
+  const branches = useInfiniteQuery({ queryKey: [...key, "branches"], initialPageParam: 1,
+    queryFn: ({ pageParam }) => getBranches({ ...pr, page: pageParam }), getNextPageParam: page => page.hasMore ? page.page + 1 : undefined,
+    enabled: active && editor === "base", retry: false });
   const files = useInfiniteQuery({ queryKey: [...key, "files", data?.headSha], initialPageParam: 1,
     queryFn: ({ pageParam }) => getFiles({ ...pr, page: pageParam }), getNextPageParam: page => page.hasMore ? page.page + 1 : undefined,
     enabled: active && section === "files" && !!data, retry: false });
@@ -54,6 +67,12 @@ export function PullRequestDetails({ pr, active, onBack, theme, navigation, host
   const selectedProject = projects.find(p => p.projectId === projectId) ?? projects[0];
   const mutation = useMutation({ mutationFn: performAction, retry: false, onSuccess: async (result, action) => {
     if ("body" in action) setBody(""); setConfirm(null); setComposer(null); toast.show(result.message, { variant: "success" });
+    await Promise.all([cache.invalidateQueries({ queryKey: key }), cache.invalidateQueries({ queryKey: ["pull-requests"] })]);
+  } });
+  const editMutation = useMutation({ mutationFn: performEdit, retry: false, onSuccess: async (result, action) => {
+    toast.show(result.message, { variant: "success" });
+    if (action.action === "change-base") setEditor(null);
+    setEditName("");
     await Promise.all([cache.invalidateQueries({ queryKey: key }), cache.invalidateQueries({ queryKey: ["pull-requests"] })]);
   } });
   const text = { color: c.foreground, fontSize: 14, lineHeight: 21 }, muted = { color: c.foregroundMuted, fontSize: 12, lineHeight: 18 };
@@ -82,6 +101,8 @@ export function PullRequestDetails({ pr, active, onBack, theme, navigation, host
     if (!parsed.success) { toast.error(parsed.error.issues[0].message); return; }
     mutation.reset(); setConfirm(parsed.data);
   }
+  function edit(action: PrEdit) { editMutation.reset(); editMutation.mutate(action); }
+  function openEditor(next: NonNullable<typeof editor>) { setEditor(current => current === next ? null : next); setEditName(""); setBaseTarget(data?.base ?? ""); editMutation.reset(); }
   const discussion = [...new Map(activity.data?.pages.flatMap(p => p.items).map(item => [item.id, item]) ?? []).values()].sort((a,b) => a.date.localeCompare(b.date));
   const reviews = reviewSummary(discussion);
   const allChecks = [...new Map(checks.data?.pages.flatMap(p => p.items).map(item => [item.id, item]) ?? []).values()];
@@ -100,7 +121,7 @@ export function PullRequestDetails({ pr, active, onBack, theme, navigation, host
   const heading = { ...text, fontSize: 13, fontWeight: "600" as const };
   const inputStyle = { ...text, minHeight: 36, padding: 8, backgroundColor: c.surface1, borderWidth: 1, borderColor: c.border, borderRadius: 5 };
   const mergeText = data ? mergeExplanation(data.mergeState, data.draft, data.mergeable) : "";
-  function changeSection(next: typeof section) { setSection(next); contentScroll.current?.scrollTo({ y: 0, animated: false }); }
+  function changeSection(next: typeof section) { setSection(next); setEditor(null); contentScroll.current?.scrollTo({ y: 0, animated: false }); }
   function compose(next: NonNullable<typeof composer>) { setComposer(next); setPreview(false); setReviewSha(data?.headSha ?? ""); mutation.reset(); }
   function submitDraft() {
     if (!data || !composer) return;
@@ -121,33 +142,95 @@ export function PullRequestDetails({ pr, active, onBack, theme, navigation, host
     {files.hasNextPage && button(files.isFetchingNextPage ? "Loading files…" : "Load more files", () => void files.fetchNextPage(), false, files.isFetching, "ChevronsDown")}
     {files.error && error(files.error.message)}
   </View>;
+  function editorAction(kind: "labels" | "assignees" | "reviewers") {
+    const open = editor === kind;
+    return <Control theme={theme} compact={layout.compact} label={open ? "Done" : "Edit"} accessibilityLabel={open ? "Done" : `Edit ${kind}`} icon={open ? "Check" : "Pencil"} expanded={open} disabled={editMutation.isPending} onPress={() => openEditor(kind)} />;
+  }
+  function choice(name: string, selected: boolean, onPress: () => void, role: "checkbox" | "radio", color?: string) {
+    return <Pressable key={name} accessibilityRole={role} accessibilityLabel={name} accessibilityState={{ checked: selected, disabled: editMutation.isPending }} disabled={editMutation.isPending} onPress={onPress}
+      onFocus={() => setFocusedChoice(name)} onBlur={() => setFocusedChoice("")} onHoverIn={() => setHoveredChoice(name)} onHoverOut={() => setHoveredChoice("")}
+      style={({ pressed }) => ({ flexDirection: "row", alignItems: "center", gap: 8, minHeight: layout.compact ? 42 : 34, paddingHorizontal: 8, borderWidth: 1, borderRadius: 6,
+        borderColor: focusedChoice === name ? c.accent : "transparent", backgroundColor: selected || pressed || hoveredChoice === name ? c.surface2 : "transparent", opacity: editMutation.isPending ? 0.5 : 1 })}>
+      {color ? <View style={{ width: 12, height: 12, borderRadius: 6, backgroundColor: `#${color}` }} /> : <Icon name="GitBranch" size={14} color={c.foregroundMuted} />}
+      <Text numberOfLines={1} style={{ ...text, fontSize: 13, flex: 1 }}>{name}</Text>
+      {selected && <Icon name="Check" size={14} color={c.accent} />}
+    </Pressable>;
+  }
+  function personChip(name: string, kind: "assignees" | "reviewers") {
+    return <View key={name} style={{ ...row, gap: 4, paddingLeft: 8, paddingRight: editor === kind ? 4 : 8, paddingVertical: 3, borderRadius: 6, backgroundColor: c.surface2 }}>
+      <Text style={{ ...text, fontSize: 12 }}>{name}</Text>
+      {editor === kind && <Pressable accessibilityRole="button" accessibilityLabel={`Remove ${name}`} disabled={editMutation.isPending} hitSlop={8} onPress={() => edit({ ...pr, action: kind === "reviewers" ? "remove-reviewer" : "remove-assignee", name })}
+        onFocus={() => setFocusedChoice(`remove:${kind}:${name}`)} onBlur={() => setFocusedChoice("")}
+        style={{ padding: 3, borderRadius: 4, borderWidth: 1, borderColor: focusedChoice === `remove:${kind}:${name}` ? c.accent : "transparent", opacity: editMutation.isPending ? 0.5 : 1 }}><Icon name="X" size={12} color={c.foregroundMuted} /></Pressable>}
+    </View>;
+  }
+  const labelChoices = [...new Map([...(data?.labels ?? []), ...(labels.data?.pages.flatMap(page => page.items) ?? [])].map(label => [label.name, label])).values()]
+    .filter(label => label.name.toLowerCase().includes(editName.toLowerCase()));
+  const branchChoices = [...new Set(branches.data?.pages.flatMap(page => page.items) ?? [])].filter(name => name.toLowerCase().includes(editName.toLowerCase()));
+  function editorControls() { return <View style={{ gap: 8 }}>
+    {editor === "labels" && <>
+      <TextInput accessibilityLabel="Filter labels" placeholder="Find a label" placeholderTextColor={c.foregroundMuted} value={editName} onChangeText={setEditName} autoCapitalize="none" style={inputStyle} />
+      {labels.isPending && <Text style={muted}>Loading labels…</Text>}{labels.error && error(labels.error.message)}
+      <ScrollView style={{ maxHeight: 210 }} nestedScrollEnabled><View>{labelChoices.map(label => { const selected = !!data?.labels.some(item => item.name === label.name); return choice(label.name, selected,
+          () => edit({ ...pr, action: selected ? "remove-label" : "add-label", name: label.name }), "checkbox", label.color); })}</View></ScrollView>
+      {labels.isSuccess && !labelChoices.length && <Text style={muted}>No matching labels</Text>}
+      {labels.hasNextPage && button("Load more labels", () => void labels.fetchNextPage(), false, labels.isFetching)}
+    </>}
+    {(editor === "assignees" || editor === "reviewers") && <>
+      <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
+        <TextInput accessibilityLabel={editor === "reviewers" ? "Reviewer username or team" : "Assignee username"} placeholder={editor === "reviewers" ? "Username or @org/team" : "GitHub username"} placeholderTextColor={c.foregroundMuted} value={editName} onChangeText={setEditName} autoCapitalize="none" autoCorrect={false} style={{ ...inputStyle, flex: 1, minWidth: 0 }} />
+        <Control theme={theme} compact={layout.compact} label="Add" accessibilityLabel={editor === "reviewers" ? "Add reviewer" : "Add assignee"} icon="Plus" onPress={() => edit({ ...pr, action: editor === "reviewers" ? "add-reviewer" : "add-assignee", name: editName.trim() })} disabled={editMutation.isPending || !editName.trim() || (editor === "assignees" && !!data && data.assignees.length >= 10)} />
+      </View>
+      {editor === "reviewers" && <Text style={muted}>Review requests notify the selected person or team.</Text>}
+      {editor === "assignees" && !!data && data.assignees.length >= 10 && <Text style={muted}>GitHub allows up to 10 assignees.</Text>}
+    </>}
+    {editor === "base" && <>
+      <Text style={heading}>Target branch</Text>
+      <TextInput accessibilityLabel="Filter target branches" placeholder="Find a branch" placeholderTextColor={c.foregroundMuted} value={editName} onChangeText={setEditName} autoCapitalize="none" autoCorrect={false} style={inputStyle} />
+      {branches.isPending && <Text style={muted}>Loading branches…</Text>}{branches.error && error(branches.error.message)}
+      <ScrollView style={{ maxHeight: 180 }} nestedScrollEnabled><View>{branchChoices.map(name => choice(name, baseTarget === name, () => setBaseTarget(name), "radio"))}</View></ScrollView>
+      {branches.isSuccess && !branchChoices.length && <Text style={muted}>No matching branches</Text>}
+      {branches.hasNextPage && button("Load more branches", () => void branches.fetchNextPage(), false, branches.isFetching)}
+      {baseTarget !== data?.base && <Text style={muted}>Changing the base can alter the diff and make review comments outdated.</Text>}
+      {button("Confirm target change", () => data && edit({ ...pr, action: "change-base", base: baseTarget, expectedBase: data.base }), true, editMutation.isPending || !baseTarget || baseTarget === data?.base || !branches.data?.pages.some(page => page.items.includes(baseTarget)))}
+    </>}
+    {editMutation.error && error(editMutation.error.message)}
+  </View>; }
   function summary() { return <View style={{ gap: 0 }}>
-    <View style={panel}><Text style={heading}>Reviewers</Text>
+    <View style={panel}><View style={{ ...row, justifyContent: "space-between" }}><Text style={heading}>Reviewers</Text>{data?.state === "open" && editorAction("reviewers")}</View>
+      {!!data?.reviewers.length && <View style={row}>{data.reviewers.map(name => personChip(name, "reviewers"))}</View>}
+      {editor === "reviewers" && editorControls()}
       {reviews.map(review => <View key={review.author} style={row}><Icon name={review.state === "APPROVED" ? "CircleCheck" : review.state === "CHANGES_REQUESTED" ? "CircleAlert" : "CircleMinus"} size={14} color={review.state === "APPROVED" ? c.statusSuccess : c.statusWarning} /><Text style={text}>{review.author}</Text><Text style={muted}>{review.state === "APPROVED" ? "Approved" : review.state === "CHANGES_REQUESTED" ? "Changes requested" : "Dismissed"}</Text></View>)}
-      {data?.reviewers.map(name => <View key={name} style={row}><Icon name="Clock3" size={14} color={c.foregroundMuted} /><Text style={text}>{name}</Text></View>)}
       {!reviews.length && !data?.reviewers.length && <Text style={muted}>{activity.isPending ? "Loading reviews…" : "No reviews requested"}</Text>}
       {activity.hasNextPage && button("Load more reviews", () => void activity.fetchNextPage(), false, activity.isFetching)}
       {activity.error && error("Reviews could not be loaded. Refresh to retry.")}
     </View>
     <View style={panel}><View style={row}><Icon name={checkIcon} size={16} color={checkColor} /><Text style={heading}>{checkLabel}</Text></View>{button("View checks", () => changeSection("checks"), false, false, "ArrowRight")}</View>
-    <View style={panel}><Text style={heading}>Assignees</Text><Text style={data?.assignees.length ? text : muted}>{data?.assignees.join(", ") || "No one assigned"}</Text>{!!data?.labels.length && <><Text style={heading}>Labels</Text><View style={row}>{data.labels.map(label => <Text key={label} style={{ ...muted, paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4, backgroundColor: c.surface2 }}>{label}</Text>)}</View></>}</View>
+    <View style={panel}><View style={{ ...row, justifyContent: "space-between" }}><Text style={heading}>Assignees</Text>{editorAction("assignees")}</View>{data?.assignees.length ? <View style={row}>{data.assignees.map(name => personChip(name, "assignees"))}</View> : <Text style={muted}>No one assigned</Text>}{editor === "assignees" && editorControls()}</View>
+    <View style={panel}><View style={{ ...row, justifyContent: "space-between" }}><Text style={heading}>Labels</Text>{editorAction("labels")}</View>{data?.labels.length ? <View style={row}>{data.labels.map(label => <Text key={label.name} style={{ ...muted, ...labelColors(label.color), paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 }}>{label.name}</Text>)}</View> : <Text style={muted}>No labels</Text>}{editor === "labels" && editorControls()}</View>
     {data?.state === "open" && <View style={panel}><Text style={heading}>Merge status</Text><Text style={muted}>{mergeText}</Text>
       {data.canMerge && data.mergeMethods.length > 0 ? button("Merge pull request", () => prepare({ ...pr, action: "merge", method: data.mergeMethods[0], headSha: data.headSha }), false, mutation.isPending, "GitMerge") : !data.draft && data.mergeable !== false && <Text style={muted}>Merging is unavailable for this account or repository.</Text>}
     </View>}
 
   </View>; }
   return <View style={{ flex: 1, backgroundColor: c.surface0 }} onLayout={event => setWidth(event.nativeEvent.layout.width)}>
-    <View style={{ paddingHorizontal: layout.compact ? 12 : 20, paddingTop: 8, gap: 8, borderBottomWidth: 1, borderColor: c.border }}>
+    <View style={{ paddingHorizontal: layout.compact ? 12 : 20, paddingTop: 8, gap: 8, borderBottomWidth: 1, borderColor: c.border, zIndex: 20 }}>
       <View style={{ ...row, justifyContent: "space-between" }}>
         <View style={{ ...row, flex: 1, minWidth: 0 }}>{button(backLabel, onBack, false, busy || mutation.isPending, "ArrowLeft")}<Text numberOfLines={1} style={{ ...muted, flexShrink: 1 }}>{pr.repository} #{pr.number}</Text></View>
         {button("Refresh", () => { onRefreshContext?.(); void cache.invalidateQueries({ queryKey: key }); void workspaces.refetch(); void cache.invalidateQueries({ queryKey: ["pr-providers", host.id] }); }, false, detail.isFetching, "RefreshCw")}
       </View>
       {data ? <>
         <Text accessibilityRole="header" style={{ ...text, fontSize: layout.compact ? 18 : 21, lineHeight: layout.compact ? 25 : 28, fontWeight: "600" }}>{data.title}</Text>
-        <View style={row}><View style={{ ...row, gap: 4, paddingHorizontal: 7, paddingVertical: 2, backgroundColor: c.surface1, borderRadius: 5 }}><Icon name={data.state === "merged" ? "GitMerge" : data.state === "closed" ? "GitPullRequestClosed" : "GitPullRequest"} size={14} color={stateColor} /><Text style={{ ...muted, color: stateColor }}>{data.draft ? "Draft" : data.state[0].toUpperCase() + data.state.slice(1)}</Text></View><Text style={muted}>{data.author}</Text><Text numberOfLines={1} style={{ ...muted, flexShrink: 1 }}>{data.head} → {data.base}</Text></View>
-        <View style={{ ...row, justifyContent: "space-between" }}><View style={row}><Text style={{ ...muted, color: c.statusSuccess }}>+{data.additions}</Text><Text style={{ ...muted, color: c.statusDanger }}>−{data.deletions}</Text><Text style={muted}>{data.commits} commits</Text></View><View style={{ ...row, gap: 2 }}>{link(data.url, "GitHub")}{button(data.canReview ? "Review" : "Comment", () => compose("comment"), true, mutation.isPending, "MessageSquare")}{data.canMerge && data.mergeMethods.length > 0 && button("Merge", () => prepare({ ...pr, action: "merge", method: data.mergeMethods[0], headSha: data.headSha }), false, mutation.isPending, "GitMerge")}</View></View>
+        <View style={row}><View style={{ ...row, gap: 4, paddingHorizontal: 7, paddingVertical: 2, backgroundColor: c.surface1, borderRadius: 5 }}><Icon name={data.state === "merged" ? "GitMerge" : data.state === "closed" ? "GitPullRequestClosed" : "GitPullRequest"} size={14} color={stateColor} /><Text style={{ ...muted, color: stateColor }}>{data.draft ? "Draft" : data.state[0].toUpperCase() + data.state.slice(1)}</Text></View><Text style={muted}>{data.author}</Text><Text numberOfLines={1} style={{ ...muted, flexShrink: 1 }}>{data.head} →</Text>
+          {data.state === "open" ? <View style={{ position: "relative", zIndex: 30 }}><Control theme={theme} compact={layout.compact} label={data.base} accessibilityLabel="Change target branch" icon="GitBranch" expanded={editor === "base"} disabled={editMutation.isPending} onPress={() => openEditor("base")} />
+            {!layout.compact && editor === "base" && <View style={{ position: "absolute", top: 36, right: 0, width: 320, padding: 12, borderRadius: 8, backgroundColor: c.surface1, shadowColor: "#000000", shadowOpacity: 0.18, shadowRadius: 12, shadowOffset: { width: 0, height: 6 }, elevation: 8 }}>{editorControls()}</View>}
+          </View> : <Text style={muted}>{data.base}</Text>}
+        </View>
+        {layout.compact && editor === "base" && <View style={{ padding: 12, borderRadius: 8, backgroundColor: c.surface1 }}>{editorControls()}</View>}
+        <View style={{ ...row, justifyContent: "space-between" }}><View style={row}><Text style={{ ...muted, color: c.statusSuccess }}>+{data.additions}</Text><Text style={{ ...muted, color: c.statusDanger }}>−{data.deletions}</Text><Text style={muted}>{data.commits} commits</Text></View><View style={{ ...row, gap: 2 }}>{link(data.url, "GitHub")}{deployment.data?.url && link(deployment.data.url, `Preview · ${deployment.data.environment}`)}{button(data.canReview ? "Review" : "Comment", () => compose("comment"), true, mutation.isPending, "MessageSquare")}{data.canMerge && data.mergeMethods.length > 0 && button("Merge", () => prepare({ ...pr, action: "merge", method: data.mergeMethods[0], headSha: data.headSha }), false, mutation.isPending, "GitMerge")}</View></View>
       </> : <View style={{ paddingVertical: 16, gap: 10 }}><View style={{ width: "75%", height: 22, backgroundColor: c.surface2, borderRadius: 4 }} /><View style={{ width: "45%", height: 14, backgroundColor: c.surface1, borderRadius: 3 }} /><Text accessibilityLiveRegion="polite" style={muted}>{detail.error ? "Pull request unavailable" : "Loading pull request…"}</Text></View>}
       {detail.error && error(`${data ? "Showing previous details. " : ""}${detail.error.message}`)}
+      {deployment.error && <Text accessibilityRole="alert" style={{ ...muted, color: c.statusWarning }}>Preview deployment could not be checked. Refresh to retry.</Text>}
       <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ flexGrow: 0 }} contentContainerStyle={{ gap: 4 }}>
         {([['overview', 'Overview'], ['files', `Files${data ? ` ${data.files}` : ""}`], ['discussion', 'Activity'], ['commits', 'Commits'], ['checks', 'Checks']] as const).map(([id,label]) => button(label, () => changeSection(id), section === id, false, undefined, "tab"))}
       </ScrollView>
@@ -182,12 +265,13 @@ export function PullRequestDetails({ pr, active, onBack, theme, navigation, host
           <View style={wide ? { width: 260, paddingLeft: 20, borderLeftWidth: 1, borderColor: c.border } : { borderTopWidth: 1, borderColor: c.border }}>{summary()}</View>
         </View>}
         {section === "files" && <>
+          {wide && <View accessibilityRole="radiogroup" accessibilityLabel="Diff view" style={row}>{button("Unified", () => setSplitView(false), !splitView, false, undefined, "radio")}{button("Split", () => setSplitView(true), splitView, false, undefined, "radio")}</View>}
           {!wide && <View style={{ gap: 8 }}><View style={{ ...row, justifyContent: "space-between" }}><Control theme={theme} compact={layout.compact} label="Changed files" icon="Files" expanded={filesOpen} onPress={() => setFilesOpen(open => !open)} disabled={files.isPending} /><Text style={muted}>{selectedFile ? loadedFiles.indexOf(selectedFile) + 1 : 0} / {data.files}</Text></View>{filesOpen && <View style={{ maxHeight: 300 }}><ScrollView nestedScrollEnabled>{fileList}</ScrollView></View>}</View>}
           {files.isPending && <Text style={muted}>Loading changed files…</Text>}{files.error && error(files.error.message)}
           {selectedFile && <View style={{ gap: 10 }}>
             <View style={{ ...row, justifyContent: "space-between" }}><Text selectable style={{ ...heading, flex: 1 }}>{selectedFile.path}</Text><Text style={{ ...muted, color: c.statusSuccess }}>+{selectedFile.additions}</Text><Text style={{ ...muted, color: c.statusDanger }}>−{selectedFile.deletions}</Text>{link(selectedFile.url, "View file")}</View>
             {selectedFile.previousPath && <Text style={muted}>Renamed from {selectedFile.previousPath}</Text>}
-            {selectedFile.patch ? <Diff key={`${selectedFile.path}:${data.headSha}`} patch={selectedFile.patch} path={selectedFile.path} theme={theme} compact={!wide} canComment={data.state === "open"} onComment={(line, side) => { setLineTarget({ path: selectedFile.path, line, side, headSha: data.headSha }); compose("inline-comment"); }} /> : <View style={{ paddingVertical: 32, gap: 10 }}><Text style={heading}>No text diff available</Text><Text style={muted}>This file may be binary, unchanged after a rename, or too large for GitHub's preview.</Text>{link(selectedFile.url, "Open complete file")}</View>}
+            {selectedFile.patch ? <Diff key={`${selectedFile.path}:${data.headSha}`} patch={selectedFile.patch} path={selectedFile.path} theme={theme} compact={!wide} split={wide && splitView} canComment={data.state === "open"} onComment={(line, side) => { setLineTarget({ path: selectedFile.path, line, side, headSha: data.headSha }); compose("inline-comment"); }} /> : <View style={{ paddingVertical: 32, gap: 10 }}><Text style={heading}>No text diff available</Text><Text style={muted}>This file may be binary, unchanged after a rename, or too large for GitHub's preview.</Text>{link(selectedFile.url, "Open complete file")}</View>}
             <View style={{ ...row, justifyContent: "space-between" }}>{button("Previous file", () => selectFile(loadedFiles[loadedFiles.indexOf(selectedFile) - 1].path), false, loadedFiles.indexOf(selectedFile) <= 0, "ArrowLeft")}{button("Next file", () => selectFile(loadedFiles[loadedFiles.indexOf(selectedFile) + 1].path), false, loadedFiles.indexOf(selectedFile) >= loadedFiles.length - 1, "ArrowRight")}</View>
             <Text style={muted}>Large patches may be truncated by GitHub. Use “View file” for complete content.</Text>
           </View>}

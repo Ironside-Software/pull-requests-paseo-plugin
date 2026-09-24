@@ -1,7 +1,16 @@
 import assert from "node:assert/strict";
-import { test } from "node:test";
+import { after, test } from "node:test";
+import { registerHooks } from "node:module";
 import type { PluginClientContext } from "@getpaseo/plugin/client";
-import { registerPrHeaders } from "../client/header";
+
+const openedUrls: string[] = [];
+const hooks = registerHooks({
+  resolve(specifier, context, next) { return specifier === "react-native" ? { url: "pr-header-test:react-native", shortCircuit: true } : next(specifier, context); },
+  load(url, context, next) { return url === "pr-header-test:react-native" ? { source: "export const Linking = { openURL: async url => globalThis.__prHeaderOpen(url) };", format: "module", shortCircuit: true } : next(url, context); },
+});
+Object.assign(globalThis, { __prHeaderOpen: (url: string) => openedUrls.push(url) });
+const { registerPrHeaders } = await import("../client/header");
+after(() => hooks.deregister());
 
 const workspace = (id: string) => ({ id, archivingAt: null, gitRuntime: { remoteUrl: "git@github.com:acme/widget.git" }, githubRuntime: { pullRequest: { url: "https://github.com/acme/widget/pull/42" } } });
 const tick = () => new Promise<void>(resolve => setImmediate(resolve));
@@ -65,4 +74,29 @@ test("cleanup during bootstrap releases the eventual subscription without regist
   resolve({ subscription: { release: async () => { released++; } } });
   await stopping;
   assert.equal(released, 1);
+});
+
+test("preview header button opens the deployment beside the PR button", async () => {
+  const registered = new Map<string, any>();
+  const client = {
+    paseo: { workspaces: { list: async () => ({ entries: [workspace("wks_preview")], pageInfo: {}, subscription: {
+      subscribe(observer: any) { observer.snapshot({ entries: [workspace("wks_preview")] }); return () => {}; }, release: async () => {},
+    } }) } },
+    rpc: async (contract: any) => contract.name.endsWith(".details")
+      ? { headSha: "a".repeat(40), mergeSha: null }
+      : { url: "https://preview.example.test/", environment: "Preview" },
+    addHeaderButton(contribution: any) {
+      registered.set(contribution.id, contribution);
+      return { remove: () => registered.delete(contribution.id), update: (patch: any) => { contribution.button = { ...contribution.button, ...patch }; } };
+    },
+  } as unknown as PluginClientContext;
+  const stop = registerPrHeaders(client);
+  await tick();
+  assert.equal(registered.size, 2);
+  const preview = [...registered.values()].find(entry => entry.button.label === "Preview");
+  assert.ok(preview);
+  await preview.button.behavior.onPress();
+  assert.deepEqual(openedUrls, ["https://preview.example.test/"]);
+  await stop();
+  assert.equal(registered.size, 0);
 });

@@ -1,6 +1,5 @@
 {
   "id": "pull-requests",
-  "description": "Your authored, assigned, and awaiting-review GitHub pull requests.",
   "requirements": { "paseo": ">=0.9.0 <0.10.0" },
   "build": [["npm", "install", "--omit=dev", "--ignore-scripts"]]
 }

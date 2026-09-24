@@ -7,7 +7,7 @@ const request: SearchRequest = { tab: "mine", filters: { ...defaultFilters }, pa
 const pr = {
   id: 42, number: 7, title: "Fix dashboard", html_url: "https://github.com/acme/app/pull/7",
   repository_url: "https://api.github.com/repos/acme/app", user: { login: "Alice" },
-  assignees: [{ login: "alice" }], draft: true, updated_at: "2026-09-22T10:00:00Z", pull_request: {},
+  assignees: [{ login: "alice" }], labels: [{ name: "bug", color: "d73a4a" }], draft: true, updated_at: "2026-09-22T10:00:00Z", pull_request: {},
 };
 
 test("queries combine authored OR assigned; review tab includes direct and team requests", () => {
@@ -44,6 +44,7 @@ test("normalization deduplicates and preserves both relationship badges", async 
   assert.equal(result.items[0].assigned, true);
   assert.equal(result.items[0].draft, true);
   assert.equal(result.items[0].repository, "acme/app");
+  assert.deepEqual(result.items[0].labels, [{ name: "bug", color: "d73a4a" }]);
   assert.equal(result.hasMore, true);
   assert.ok(calls[1].includes("advanced_search=true"));
   assert.ok(calls[1].includes("per_page=100"));

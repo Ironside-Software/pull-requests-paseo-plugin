@@ -20,7 +20,9 @@ Open **Pull Requests** in the sidebar. Connected clients use the daemon's GitHub
 ## Features
 
 - Authored, assigned, and requested-review PRs with search and filters.
-- Descriptions, diffs, comments, reviews, commits, checks, and merging.
-- Workspace header **PR** button, visible only when Paseo reports a linked PR.
+- Descriptions, Paseo-highlighted unified or split diffs, comments, reviews, commits, checks, and merging.
+- GitHub-colored labels and preview deployment links on PR cards; both also appear in details when available.
+- Edit labels, assignees, requested reviewers, and the target branch in place.
+- Workspace header **PR** button for linked PRs, with a **Preview** button beside it when a preview deployment exists.
 - Sidebar, Command Center, and workspace panels.
 - Reuse or create PR workspaces; launch Terminal, Codex, Claude, or other ready providers from the **Paseo** menu. Terminal opens its workspace; select the terminal tab manually.

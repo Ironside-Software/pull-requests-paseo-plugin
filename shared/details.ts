@@ -6,18 +6,32 @@ export const prKeySchema = z.object({ repository: repositoryName, number: z.numb
 export type PrKey = z.infer<typeof prKeySchema>;
 export const shaSchema = z.string().regex(/^[0-9a-f]{40}$/i);
 export const webUrl = z.string().url().refine(value => new URL(value).protocol === "https:");
+export const labelSchema = z.object({ name: z.string(), color: z.string().regex(/^[0-9a-fA-F]{6}$/) });
 export const mergeMethodSchema = z.enum(["squash", "merge", "rebase"]);
 export const detailsSchema = prKeySchema.extend({
   title: z.string(), url: webUrl, body: z.string(), author: z.string(), login: z.string(),
   state: z.enum(["open", "closed", "merged"]), draft: z.boolean(),
-  head: z.string(), base: z.string(), headSha: shaSchema,
+  head: z.string(), base: z.string(), headSha: shaSchema, mergeSha: shaSchema.nullable(),
   additions: z.number(), deletions: z.number(), files: z.number(), commits: z.number(),
-  updatedAt: z.string(), labels: z.array(z.string()), assignees: z.array(z.string()), reviewers: z.array(z.string()),
+  updatedAt: z.string(), labels: z.array(labelSchema), assignees: z.array(z.string()), reviewers: z.array(z.string()),
   mergeable: z.boolean().nullable(), mergeState: z.string(), canMerge: z.boolean(), canReview: z.boolean(),
   mergeMethods: z.array(mergeMethodSchema),
 });
 export type PrDetails = z.infer<typeof detailsSchema>;
 export const detailsRpc = defineRpc({ name: "pull-requests.details", input: prKeySchema, output: detailsSchema });
+export const previewRpc = defineRpc({ name: "pull-requests.preview", input: prKeySchema.extend({ headSha: shaSchema, mergeSha: shaSchema.nullable() }), output: z.object({ url: webUrl.nullable(), environment: z.string().nullable() }) });
+export const previewForPrRpc = defineRpc({ name: "pull-requests.preview-for-pr", input: prKeySchema, output: z.object({ url: webUrl.nullable(), environment: z.string().nullable() }) });
+export const labelsRpc = defineRpc({ name: "pull-requests.labels", input: prKeySchema.extend({ page: z.number().int().min(1).max(1000) }), output: z.object({ items: z.array(labelSchema), page: z.number(), hasMore: z.boolean() }) });
+export const branchesRpc = defineRpc({ name: "pull-requests.branches", input: prKeySchema.extend({ page: z.number().int().min(1).max(1000) }), output: z.object({ items: z.array(z.string()), page: z.number(), hasMore: z.boolean() }) });
+const name = z.string().trim().min(1).max(100);
+export const editSchema = z.discriminatedUnion("action", [
+  prKeySchema.extend({ action: z.enum(["add-label", "remove-label"]), name }),
+  prKeySchema.extend({ action: z.enum(["add-assignee", "remove-assignee"]), name: name.regex(/^[a-zA-Z0-9][a-zA-Z0-9-]*$/) }),
+  prKeySchema.extend({ action: z.enum(["add-reviewer", "remove-reviewer"]), name: name.regex(/^(?:[a-zA-Z0-9][a-zA-Z0-9-]*|@[a-zA-Z0-9][a-zA-Z0-9-]*\/[a-zA-Z0-9][a-zA-Z0-9-]*)$/) }),
+  prKeySchema.extend({ action: z.literal("change-base"), base: z.string().trim().min(1).max(255), expectedBase: z.string().min(1) }),
+]);
+export type PrEdit = z.infer<typeof editSchema>;
+export const editRpc = defineRpc({ name: "pull-requests.edit", input: editSchema, output: z.object({ message: z.string() }) });
 const pageInput = prKeySchema.extend({ page: z.number().int().min(1).max(1000) });
 export const fileSchema = z.object({ path: z.string(), previousPath: z.string().nullable(), status: z.string(), additions: z.number(), deletions: z.number(), patch: z.string().nullable(), url: webUrl });
 export const filesRpc = defineRpc({ name: "pull-requests.files", input: pageInput.extend({ page: z.number().int().min(1).max(30) }), output: z.object({ items: z.array(fileSchema), page: z.number(), hasMore: z.boolean(), warning: z.string().nullable() }) });
