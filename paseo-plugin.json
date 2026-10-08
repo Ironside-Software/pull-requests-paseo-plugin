@@ -1,5 +1,5 @@
 {
   "id": "pull-requests",
-  "requirements": { "paseo": ">=0.9.0 <0.11.0" },
+  "requirements": { "paseo": ">=0.9.0 <0.12.0" },
   "build": [["npm", "install", "--omit=dev", "--ignore-scripts"]]
 }
