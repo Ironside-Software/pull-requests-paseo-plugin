@@ -8,7 +8,7 @@ Browse and review GitHub pull requests in Paseo, including private repositories.
 
 ## Installation
 
-Requires Paseo **0.9.x or 0.10.x**, npm, and GitHub CLI on the daemon host. Enable **Settings → Plugins**, then run as the daemon user:
+Requires Paseo **0.9.x, 0.10.x, or 0.11.x**, npm, and GitHub CLI on the daemon host. Enable **Settings → Plugins**, then run as the daemon user:
 
 ```sh
 gh auth login --hostname github.com
